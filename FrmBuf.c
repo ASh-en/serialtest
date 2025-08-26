@@ -23,9 +23,9 @@ U32 Sr_NBytes(const SStaticRngId rngId)
 	return ((rngId->pToBuf + rngId->bufSize - rngId->pFromBuf) % rngId->bufSize);
 }
 
-U32 Sr_BufPut(SStaticRngId rngId, const U8 *pBuf, S32 nbytes)
+S32 Sr_BufPut(SStaticRngId rngId, const U8 *pBuf, S32 nbytes)
 {
-	U32 len, used;
+	S32 len, used;
 
 	used = Sr_NBytes(rngId);
 

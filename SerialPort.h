@@ -10,7 +10,7 @@ int     SerialPort_GetDataReceivedHandler();
 int     SerialPort_GetDataSentHandler();
 BOOL    SerialPort_OpenAsync(int comPortNumber, 
                              int baudRate,                             
-                             void (*OnDataReceivedHandler)(const unsigned char* pData, int dataLength),
+                             int (*OnDataReceivedHandler)(const unsigned char* pData, int dataLength),
                              void (*OnDataSentHandler)(void),                         
                              int timeoutMS);
 BOOL    SerialPort_Open(int comPortNumber, int baudRate, int timeoutMS);

@@ -10,9 +10,9 @@
                 "UNICODE",
                 "_UNICODE"
             ],
-            "compilerPath": "D:\\Software\\TDM-GCC-64\\bin\\gcc.exe",//mingw的路径
-            "cStandard": "c11",//c标准
-            "cppStandard": "gnu++14",//cpp标准
+            "compilerPath": "D:\\Software\\TDM-GCC-64\\bin\\gcc.exe",//TDM的路径
+            "cStandard": "c11",         //c标准
+            "cppStandard": "gnu++14",   //cpp标准
             "intelliSenseMode": "windows-gcc-x64"
         }
     ],

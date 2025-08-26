@@ -20,7 +20,9 @@
 #define uFRAME_MAX_LEN			(uFRAME_HEAD_LEN+MAX_CMD_LEN+uFRAME_END_LEN)	//传输帧最大长度
 
 void GloabalRingBufInit(void);
-U32 PutPrmFrame(const U8 *buf, U32 dataByte);
+S32 PutPrmFrame(const U8 *buf, S32 dataByte);
 void ProcPrmFrame(void);
+void SendCmdAns(const U8 *pBuf, S32 byteLen);
+U16 Cmd2Frm(U8 *pfrm, U8 *pcmd,U16 nByteLen);
 
-#endif
+#endif/*__CMDFRM_H__*/

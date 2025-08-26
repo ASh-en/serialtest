@@ -2,19 +2,9 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include "serial_port.h"
+#include "SerialPort.h"
 #include "CmdFrm.h"
 #include "FrmBuf.h"
-
-// 串口接收线程使用全局环形缓冲
-extern SStaticRng mRecvRngId;       // CmdFrm.c 中定义
-extern U8 m_FrmRcvBuf[MAX_RB_LEN]; // CmdFrm.c 中定义
-
-
-static bool recvThreadRunning = false;
-static HANDLE hComGlobal = NULL;
-static HANDLE hThread = NULL;
-
 
 
 
@@ -22,7 +12,7 @@ static HANDLE m_portHandle = 0;                                                 
 static HANDLE m_workingThread = 0;                                                                      // 工作线程句柄
 static DWORD  m_workingThreadId = 0;                                                                    // 工作线程ID   
 static int    m_timeoutMilliSeconds = 0;                                                                // 读写超时时间，单位毫秒
-static void (*m_OnDataReceivedHandler)(const unsigned char* pData, int dataLength) = NULL;              // 数据接收回调函数
+static int  (*m_OnDataReceivedHandler)(const unsigned char* pData, int dataLength) = NULL;              // 数据接收回调函数
 static void (*m_OnDataSentHandler)(void) = NULL;                                                        // 数据发送完成回调函数
 static CRITICAL_SECTION m_criticalSectionRead;                                                          // 读操作临界区
 static CRITICAL_SECTION m_criticalSectionWrite;                                                         // 写操作临界区 
@@ -90,8 +80,8 @@ void SerialPort_Uninitialize(void)
  * 该函数返回串口模块当前设置的最大超时时间（毫秒）。
  * 超时时间用于串口读操作中，控制等待数据的最长时间。
  *
- * @return 当前串口模块的最大超时时间（毫秒）
- * @note 返回值为 SerialPort_Open 或 SerialPort_OpenAsync 设置的 timeoutMS。
+ * @return  当前串口模块的最大超时时间（毫秒）
+ * @note    返回值为 SerialPort_Open 或 SerialPort_OpenAsync 设置的 timeoutMS。
  */
 int SerialPort_GetMaxTimeout()
 {
@@ -108,13 +98,13 @@ int SerialPort_GetMaxTimeout()
  * 该函数会打开指定的串口，并在串口打开成功后根据提供的回调函数启动异步线程，
  * 用于接收数据或在发送完成时通知调用者。
  *
- * @param comPortNumber 串口号，例如 COM1 -> 1
- * @param baudRate      串口波特率，例如 9600, 115200
- * @param OnDataReceivedHandler 数据接收回调函数指针，当串口有数据到达时调用
- *                               如果不需要接收回调，可以传 NULL
- * @param OnDataSentHandler     数据发送完成回调函数指针，当写入缓冲完成时调用
- *                               如果不需要发送回调，可以传 NULL
- * @param timeoutMS     串口读操作超时时间（毫秒），用于内部超时判断
+ * @param comPortNumber             串口号，例如 COM1 -> 1
+ * @param baudRate                  串口波特率，例如 9600, 115200
+ * @param OnDataReceivedHandler     数据接收回调函数指针，当串口有数据到达时调用
+ *                                  如果不需要接收回调，可以传 NULL
+ * @param OnDataSentHandler         数据发送完成回调函数指针，当写入缓冲完成时调用
+ *                                  如果不需要发送回调，可以传 NULL
+ * @param timeoutMS                 串口读操作超时时间（毫秒），用于内部超时判断
  *
  * @return TRUE  打开串口成功，异步线程已启动（如果提供了回调）
  *         FALSE 打开串口失败
@@ -125,7 +115,7 @@ int SerialPort_GetMaxTimeout()
  *       3. 调用 SerialPort_Close() 可以关闭串口并停止异步线程
  */
 BOOL SerialPort_OpenAsync(int comPortNumber, int baudRate,                             
-                     void (*OnDataReceivedHandler)(const unsigned char* pData, int dataLength),
+                     int (*OnDataReceivedHandler)(const unsigned char* pData, int dataLength),
                      void (*OnDataSentHandler)(void),                         
                      int timeoutMS
                     )
@@ -151,12 +141,12 @@ BOOL SerialPort_OpenAsync(int comPortNumber, int baudRate,
  * 该函数用于打开指定 COM 端口，并设置波特率、数据位、校验位、停止位以及读超时。
  * 成功打开后，将返回一个有效的句柄用于后续读写操作。
  *
- * @param comPortNumber 串口号，例如 COM1 对应 1
- * @param baudRate 波特率，例如 9600, 115200
- * @param timeoutMS 串口读操作超时时间（毫秒），最大支持 15000 ms
+ * @param comPortNumber         串口号，例如 COM1 对应 1
+ * @param baudRate              波特率，例如 9600, 115200
+ * @param timeoutMS             串口读操作超时时间（毫秒），最大支持 15000 ms
  *
- * @return TRUE 成功打开串口，FALSE 打开失败
- * @note 如果端口号无效、超时过大或 CreateFile 打开失败，会返回 FALSE
+ * @return  TRUE 成功打开串口，FALSE 打开失败
+ * @note    如果端口号无效、超时过大或 CreateFile 打开失败，会返回 FALSE
  */
 BOOL SerialPort_Open(int comPortNumber, int baudRate, int timeoutMS)
 {
@@ -226,23 +216,30 @@ BOOL SerialPort_Open(int comPortNumber, int baudRate, int timeoutMS)
  * 该函数用于关闭串口句柄，确保在关闭过程中不会有线程正在读写串口。
  * 使用临界区保护读写操作，避免在关闭时发生资源冲突。
  *
- * @param 无
- * @return 无
- * @note 调用该函数后，串口句柄 m_portHandle 被置为 NULL，工作线程相关句柄和 ID 也被清零。
+ * @param   无
+ * @return  无
+ * @note    调用该函数后，串口句柄 m_portHandle 被置为 NULL，工作线程相关句柄和 ID 也被清零。
  */
 void SerialPort_Close()
 {    
     EnterCriticalSection(&m_criticalSectionRead);       // 进入临界区，防止在读取缓冲区过程中关闭串口
     EnterCriticalSection(&m_criticalSectionWrite);      // 进入临界区，防止在写入缓冲区过程中关闭串口
 
+
+    // 等待线程退出
+    if (m_workingThread)
+    { 
+        WaitForSingleObject(m_workingThread, 2000);     // 等待线程结束（最多等待 2 秒）
+        CloseHandle(m_workingThread);                   // 释放线程句柄
+        m_workingThread = NULL;                         // 清空工作线程句柄
+        m_workingThreadId = 0;                          // 清空工作线程 ID
+    }
     // 如果串口句柄有效，则关闭
 	if (m_portHandle)
 	{
 		CloseHandle(m_portHandle);			            // 调用 Windows API 关闭串口句柄
         m_portHandle = NULL;                            // 置空全局串口句柄
         Sleep(SERIALPORT_INTERNAL_TIMEOUT*4);           // 确保任何挂起操作完成
-        m_workingThread = NULL;                         // 清空工作线程句柄
-        m_workingThreadId = 0;                          // 清空工作线程 ID
 	}
 
     // 离开临界区，允许其他线程访问串口
@@ -257,7 +254,7 @@ void SerialPort_Close()
  *
  * 该函数用于判断串口句柄是否有效，以确定串口当前是否处于打开状态。
  *
- * @param 无
+ * @param  无
  * @return BOOL
  *         - TRUE  : 串口已打开
  *         - FALSE : 串口未打开
@@ -360,7 +357,7 @@ int SerialPort__ReadBuffer(unsigned char* pData, int dataLength, int timeOutMS)
 
         }
     }
-	return bytesReadTotal;          // 减少等待计数
+	return bytesReadTotal;          // 返回实际读取的字节数
 }
 
 
@@ -452,7 +449,7 @@ int SerialPort_WriteLine(char* pLine, BOOL addCRatEnd)
 
     EnterCriticalSection(&m_criticalSectionWrite);
     result = SerialPort__WriteBuffer((unsigned char*)pLine, lineLength);
-    if (pLine[lineLength-1]!=0x0D)
+    if (addCRatEnd && pLine[lineLength-1]!=0x0D)
     {
         char cr = 13;
         result+=SerialPort__WriteBuffer((unsigned char*)&cr, 1);
@@ -533,6 +530,7 @@ DWORD WINAPI SerialPort_WaitForData( LPVOID lpParam )
             if (m_OnDataReceivedHandler)
             {
                 m_OnDataReceivedHandler(packet, bytesRead);
+                //printf("Received %d bytes data.\n", bytesRead);
             }
         }
     }    
@@ -541,44 +539,5 @@ DWORD WINAPI SerialPort_WaitForData( LPVOID lpParam )
 
 
 
-/**
- * 功能：
- *   - recvThread：轮询串口读取数据并写入环形缓冲
- *   - startReceiveThread：启动接收线程
- *   - stopReceiveThread：停止接收线程并释放资源
- */
-static DWORD WINAPI recvThread(LPVOID param)
-{
-    U8 buf[128];
-    DWORD nRead;
 
-    while (recvThreadRunning)
-    {
-        if (ReadFile(hComGlobal, buf, sizeof(buf), &nRead, NULL) && nRead>0)
-        {
-            PutPrmFrame(buf,nRead);
-        }
-        else Sleep(5);
-    }
-    return 0;
-}
 
-bool startReceiveThread(HANDLE hCom) {
-    if (hThread != NULL) return false;
-
-    hComGlobal = hCom;
-
-    hThread = CreateThread(NULL, 0, recvThread, NULL, 0, NULL);
-    if (hThread == NULL) return false;
-
-    return true;
-}
-
-void stopReceiveThread(void)
-{
-    if(!hThread) return;
-    recvThreadRunning=false;
-    WaitForSingleObject(hThread,INFINITE);
-    CloseHandle(hThread);
-    hThread=NULL;
-}

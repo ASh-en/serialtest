@@ -1,12 +1,22 @@
 #include <stdio.h>
 #include "CmdFrm.h"
 #include "FrmBuf.h"
+#include "ProcCmd.h"
+#include "SerialPort.h"
+
 
 //命令接收过程
 
 //接收缓存区考虑使用中断接收
 static SStaticRng mRecvRngId;
 static U8 m_FrmRcvBuf[MAX_RB_LEN];
+
+#ifdef SEND_RING_BUF
+//发送缓冲区
+static SStaticRng mSendRngId;
+static U8 m_FrmSndBuf[MAX_RB_LEN];
+
+#endif
 
 static U16 nFrmShortCnt = 0;
 static U8 m_pReadBuf[MAX_CMD_LEN];
@@ -17,10 +27,15 @@ static U8 m_pReadBuf[MAX_CMD_LEN];
 void GloabalRingBufInit(void)
 {
 	Sr_Create(&mRecvRngId, m_FrmRcvBuf, sizeof(m_FrmRcvBuf));
+
+    #ifdef SEND_RING_BUF
+    Sr_Create(&mSendRngId, m_FrmSndBuf, sizeof(m_FrmSndBuf));
+    #endif
+
 	nFrmShortCnt = 0;
 }
 
-U32 PutPrmFrame(const U8 *buf, U32 dataByte)
+S32 PutPrmFrame(const U8 *buf, S32 dataByte)
 {
 	return Sr_BufPut(&mRecvRngId, buf, dataByte);
 }
@@ -37,7 +52,7 @@ static U32 FBufferHasExFrame(SStaticRngId rngId, U8 *buffer)
 
 	while(Sr_BufGetNoDel(rngId, buffer, uFRAME_MIN_LEN) == uFRAME_MIN_LEN)//有最短帧长可接收
 	{
-		len = ((U16)buffer[uFRAME_LEN_H_IDX] << 8) | buffer[uFRAME_LEN_L_IDX] + uFRAME_HE_ND_LEN;//完整帧长
+		len = (U16)((buffer[uFRAME_LEN_H_IDX] << 8) | buffer[uFRAME_LEN_L_IDX]) + uFRAME_HE_ND_LEN;//完整帧长
 		//帧头正确且长度合法
 		if((buffer[0] == FRAME_HEAD)
 			&& (len >= uFRAME_MIN_LEN) && (len <= uFRAME_MAX_LEN))
@@ -123,71 +138,41 @@ U16 Cmd2Frm(U8 *pfrm, U8 *pcmd,U16 nByteLen)
 
 
 
-
-U8 ProcTemplateCmd(const U8 *pCmd, U16 len)//pCmd为接收到的命令,len为pCmd的长度，防止越界访问
+void SendCmdAns(const U8 *pBuf, S32 byteLen)
 {
-	U16 i,nSendLen, idx = 0;        //从0位置直接开始填入具体数据。
-	U8 nDataAns[6] = {0};           //除特殊的命令外，应答基本为6个字节，根据具体反馈命令可修改
-	U8 Frm[12] = {0};               //帧头帧尾需要2个字节，设备号1个字节，长度2个字节，校验位1个字节，Len+6；
-	nDataAns[idx++] = pCmd[0];      //应答命令字，根据需要接收到的命令进行填写。
+#ifdef SEND_RING_BUF
+	Sr_BufPut(&mSendRngId, pBuf, byteLen);              //放入发送缓冲区
+#else
+	SerialPort_WriteBuffer(pBuf, byteLen);             //直接发送
+#endif
+}
+
+
+
+
+#ifdef SEND_RING_BUF
+//从缓冲区中取数据写到串口
+void WriteData2Serial(void)
+{
+	U32 i, nLen, nSendLen;
+    U8 buf[64];
+	//无数据待发送
+	if((nLen=Sr_NBytes(&mSendRngId)) == 0)
+	{
+		return;
+	}
     
-    /**
-     * 根据pCmd中的内容进行填写nDataAns，不同的命令可能需要编写不同的ProcTemplateCmd()函数
-	 * nDataAns[idx++] = data1;
-	 * nDataAns[idx++] = data2;
-     * 内容填写完成后，调用Cmd2Frm()函数转为传输帧
-     */
-
-    nSendLen = Cmd2Frm(Frm, nDataAns, idx);
-    //写入串口
-	//SendCmdAns(Frm, nSendLen);      //写入串口
-	return TRUE;
-}
-
-U8 ProcParaCmd(const U8 *pCmd, U16 len)
-{
-    U16 i,nSendLen, idx = 0;        //从0位置直接开始填入具体数据。
-    U8 nDataAns[6] = {0};           //除特殊的命令外，应答基本为6个字节，根据具体反馈命令可修改
-    U8 Frm[12] = {0};               //帧头帧尾  需要2个字节，设备号1个字节，长度2个字节，校验位1个字节，Len+6；
-    nDataAns[idx++] = pCmd[0];      //应答命令字，根据需要接收到的命令进行填写。
-
-    #ifdef DEBUG_PRINT
-    printf("ProcParaCmd: ");
-    for(i=0;i<len;i++)  
+    if(nLen > sizeof(buf))
     {
-        printf(" %02X",pCmd[i]);
+        nLen = sizeof(buf);
     }
-    printf("\n");
-    #endif
+	nSendLen = Sr_BufGet(&mSendRngId, buf, nLen);
+    SerialPort_WriteBuffer(buf, nSendLen);
 
-    nSendLen = Cmd2Frm(Frm, nDataAns, idx);
-    //写入串口      
-    //SendCmdAns(Frm, nSendLen);
-    return TRUE;
 }
+#endif
 
 
-U8 ProcErrorCmd(const U8 *pCmd, U16 len)
-{
-    U16 i,nSendLen, idx = 0;        //从0位置直接开始填入具体数据。
-    U8 nDataAns[6] = {0};           //除特殊的命令外，应答基本为6个字节，根据具体反馈命令可修改
-    U8 Frm[12] = {0};               //帧头帧尾  需要2个字节，设备号1个字节，长度2个字节，校验位1个字节，Len+6；
-    nDataAns[idx++] = pCmd[0];      //应答命令字，根据需要接收到的命令进行填写。
-    
-    #ifdef DEBUG_PRINT
-    printf("ProcErrorCmd: ");
-    for(i=0;i<len;i++)  
-    {
-        printf(" %02X",pCmd[i]);
-    }
-    printf("\n");
-    #endif
-
-    nSendLen = Cmd2Frm(Frm, nDataAns, idx);
-    //写入串口
-    //SendCmdAns(Frm, nSendLen);      //写入串口
-    return TRUE;
-}
 
 //主线程中轮询
 void ProcPrmFrame(void)
@@ -202,7 +187,7 @@ void ProcPrmFrame(void)
 		switch(frmType)
 		{
 		    case 0x11:	ProcParaCmd(m_pReadBuf, len);	break;	//0x11	参数指令
-		    //case 0x22:	ProcWaveCmd(m_pReadBuf, len);	break;	//0x22	波形指令
+		    case 0x22:	ProcWaveCmd(m_pReadBuf, len);	break;	//0x22	波形指令
 
 		    //其他非法指令输出应答错误
 		    default:

@@ -16,7 +16,7 @@ typedef SStaticRng *SStaticRngId;
 // 创建缓冲区
 U8 Sr_Create(SStaticRngId pRnd, U8 *pBuf, U32 size);
 U32 Sr_NBytes(const SStaticRngId rngId);
-U32 Sr_BufPut(SStaticRngId rngId, const U8 *pBuf, S32 nbytes);
+S32 Sr_BufPut(SStaticRngId rngId, const U8 *pBuf, S32 nbytes);
 U32 Sr_BufGet(SStaticRngId rngId, U8 *pBuf, S32 maxbytes);
 U32 Sr_BufGetNoDel(SStaticRngId rngId, U8 *pBuf, S32 maxbytes);
 U32 Sr_BufDrop(SStaticRngId rngId, U32 size);
