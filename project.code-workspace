@@ -1,0 +1,26 @@
+{
+    "folders": [
+        {
+            "path": "c_version"
+        },
+        {
+            "path": "cpp_version"
+        }
+    ],
+    "settings": {
+        // 文件/文件夹显示规则
+        "files.exclude": {
+            "**/.git": true,       // 隐藏所有 .git 文件夹（含子模块）
+            "**/.vscode": false,   // 显示各子目录的 .vscode 配置
+            "**/*.o": true,         // 隐藏编译产物
+            "**/build": true        // 隐藏 build 目录
+        },
+
+        // 编辑器通用设置
+        "editor.tabSize": 4,
+        "editor.insertSpaces": true,
+        "files.encoding": "utf8",
+        "files.autoSave": "afterDelay",
+        "files.autoSaveDelay": 1000
+    }
+}
