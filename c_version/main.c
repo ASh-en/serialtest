@@ -1,21 +1,29 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <conio.h>
+#include <windows.h>
 
 #include "CmdFrm.h"
 #include "SerialPort.h"
 #include "ProcCmd.h"
+extern SerialPort sp;  // 串口实例对象
 
-void DataSent()
+/* 数据发送完成回调 */
+void DataSent(const U8* pData, S32 dataLength)
 {
-    printf("Info: Data sent\r\n");
+    static U32 count = 0;
+    static U32 TotalCount = 0;
+    TotalCount += dataLength;
+    printf("Count %d, Info: Data sent %d bytes, Total %d bytes\r\n", ++count, dataLength, TotalCount);
+
 }
 
+/* 程序入口 */
 int main(int argc, char* argv[])
 {
-    
-    int comPort = 5;          // 默认使用 COM5 端口
-    int baudRate = 115200;     // 默认波特率 115200
-    int timeoutMS = 50;     // 默认超时时间 50 毫秒
+    int comPort   = 5;       // 默认 COM5
+    int baudRate  = 115200;  // 默认波特率
+    int timeoutMS = 50;      // 默认超时时间
 
     if (argc >= 2) {
         comPort = atoi(argv[1]);
@@ -29,15 +37,17 @@ int main(int argc, char* argv[])
 
     printf("Opening serial port COM%d at %d baud...\n", comPort, baudRate);
 
-    SerialPort_Initialize();
+    
+    SerialPort_Initialize(&sp);
     GloabalRingBufInit();
 
-    if (!SerialPort_OpenAsync(comPort, baudRate, PutPrmFrame, DataSent, timeoutMS)) {
+    if (!SerialPort_OpenAsync(&sp, comPort, baudRate, PutPrmFrame, DataSent, timeoutMS)) {
         printf("Failed to open serial port COM%d\n", comPort);
+        SerialPort_Uninitialize(&sp);
         return -1;
     }
 
-    printf("Serial port COM%d opened successfully.\n", comPort);
+    printf("Serial port COM%d opened successfully.\n", comPort, baudRate);
     printf("Press 'q' to quit.\n");
 
     while (1) {
@@ -50,11 +60,11 @@ int main(int argc, char* argv[])
             }
         }
 
-        Sleep(10); // 避免 CPU 占用过高
+        Sleep(10); // 降低 CPU 占用
     }
 
-    SerialPort_Close();
-    SerialPort_Uninitialize();
+    SerialPort_Close(&sp);
+    SerialPort_Uninitialize(&sp);
 
     printf("Serial port closed. Exiting program.\n");
     return 0;

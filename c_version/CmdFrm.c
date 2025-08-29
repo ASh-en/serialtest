@@ -2,7 +2,7 @@
 #include "CmdFrm.h"
 #include "FrmBuf.h"
 #include "ProcCmd.h"
-#include "SerialPort.h"
+
 
 
 //命令接收过程
@@ -20,6 +20,7 @@ static U8 m_FrmSndBuf[MAX_RB_LEN];
 
 static U16 nFrmShortCnt = 0;
 static U8 m_pReadBuf[MAX_CMD_LEN];
+
 
 
 
@@ -138,39 +139,6 @@ U16 Cmd2Frm(U8 *pfrm, U8 *pcmd,U16 nByteLen)
 
 
 
-void SendCmdAns(const U8 *pBuf, S32 byteLen)
-{
-#ifdef SEND_RING_BUF
-	Sr_BufPut(&mSendRngId, pBuf, byteLen);              //放入发送缓冲区
-#else
-	SerialPort_WriteBuffer(pBuf, byteLen);             //直接发送
-#endif
-}
-
-
-
-
-#ifdef SEND_RING_BUF
-//从缓冲区中取数据写到串口
-void WriteData2Serial(void)
-{
-	U32 i, nLen, nSendLen;
-    U8 buf[64];
-	//无数据待发送
-	if((nLen=Sr_NBytes(&mSendRngId)) == 0)
-	{
-		return;
-	}
-    
-    if(nLen > sizeof(buf))
-    {
-        nLen = sizeof(buf);
-    }
-	nSendLen = Sr_BufGet(&mSendRngId, buf, nLen);
-    SerialPort_WriteBuffer(buf, nSendLen);
-
-}
-#endif
 
 
 
@@ -188,7 +156,8 @@ void ProcPrmFrame(void)
 		{
 		    case 0x11:	ProcParaCmd(m_pReadBuf, len);	break;	//0x11	参数指令
 		    case 0x22:	ProcWaveCmd(m_pReadBuf, len);	break;	//0x22	波形指令
-
+            
+            case 0xAA:   ProcTestCmd(m_pReadBuf, len);    break;  //0xAA   测试指令
 		    //其他非法指令输出应答错误
 		    default:
 			    m_pReadBuf[1] = 0xFF;

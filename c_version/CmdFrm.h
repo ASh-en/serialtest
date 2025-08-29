@@ -22,7 +22,6 @@
 void GloabalRingBufInit(void);
 S32 PutPrmFrame(const U8 *buf, S32 dataByte);
 void ProcPrmFrame(void);
-void SendCmdAns(const U8 *pBuf, S32 byteLen);
 U16 Cmd2Frm(U8 *pfrm, U8 *pcmd,U16 nByteLen);
 
 #endif/*__CMDFRM_H__*/

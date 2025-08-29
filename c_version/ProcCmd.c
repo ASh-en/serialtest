@@ -1,6 +1,7 @@
 #include "ProcCmd.h"
 #include <stdlib.h>
 #include "CmdFrm.h"
+SerialPort sp;  // 串口实例对象
 
 
 U8 ProcTemplateCmd(const U8 *pCmd, U16 len)//pCmd为接收到的命令,len为pCmd的长度，防止越界访问
@@ -19,7 +20,7 @@ U8 ProcTemplateCmd(const U8 *pCmd, U16 len)//pCmd为接收到的命令,len为pCm
 
     nSendLen = Cmd2Frm(Frm, nDataAns, idx);
     //写入串口
-	SendCmdAns(Frm, nSendLen);      //写入串口
+	SendCmdAns(&sp, Frm, nSendLen);      //写入串口
 	return TRUE;
 }
 
@@ -41,7 +42,7 @@ U8 ProcParaCmd(const U8 *pCmd, U16 len)
 
     nSendLen = Cmd2Frm(Frm, nDataAns, idx);
     //写入串口      
-    SendCmdAns(Frm, nSendLen);
+    SendCmdAns(&sp, Frm, nSendLen);
     return TRUE;
 }
 
@@ -64,7 +65,7 @@ U8 ProcWaveCmd(const U8 *pCmd, U16 len)//0x22	波形指令
 
     nSendLen = Cmd2Frm(Frm, nDataAns, idx);
     //写入串口
-    SendCmdAns(Frm, nSendLen);      //写入串口
+    SendCmdAns(&sp, Frm, nSendLen);      //写入串口
     return TRUE;
 }
 
@@ -88,8 +89,58 @@ U8 ProcErrorCmd(const U8 *pCmd, U16 len)
 
     nSendLen = Cmd2Frm(Frm, nDataAns, idx);
     //写入串口
-    SendCmdAns(Frm, nSendLen);      //写入串口
+    SendCmdAns(&sp, Frm, nSendLen);      //写入串口
+    return TRUE;
+}
+U8 ProcTestCmd(const U8 *pCmd, U16 len)
+{
+    U16 i,nSendLen, idx = 0;        //从0位置直接开始填入具体数据。
+    U8 nDataAns[6] = {0};           //除特殊的命令外，应答基本为6个字节，根据具体反馈命令可修改
+    U8 Frm[12] = {0};               //帧头帧尾  需要2个字节，设备号1个字节，长度2个字节，校验位1个字节，Len+6；
+    nDataAns[idx++] = pCmd[0];      //应答命令字，根据需要接收到的命令进行填写。
+    
+
+    nDataAns[idx++] = pCmd[1];      //测试命令，返回固定数据
+    nDataAns[idx++] = pCmd[2];      //测试命令，返回固定数据
+    nDataAns[idx++] = pCmd[3];      //测试命令，返回固定数据
+
+    nSendLen = Cmd2Frm(Frm, nDataAns, idx);
+    //写入串口
+    SendCmdAns(&sp, Frm, nSendLen);      //写入串口
     return TRUE;
 }
 
 
+void SendCmdAns(SerialPort* sp, const U8 *pBuf, S32 byteLen)
+{
+#ifdef SEND_RING_BUF
+	Sr_BufPut(&mSendRngId, pBuf, byteLen);              //放入发送缓冲区
+#else
+	SerialPort_WriteBuffer(sp, pBuf, byteLen);             //直接发送
+#endif
+}
+
+
+
+
+#ifdef SEND_RING_BUF
+//从缓冲区中取数据写到串口
+void WriteData2Serial(SerialPort* sp)
+{
+	U32 i, nLen, nSendLen;
+    U8 buf[64];
+	//无数据待发送
+	if((nLen=Sr_NBytes(&mSendRngId)) == 0)
+	{
+		return;
+	}
+    
+    if(nLen > sizeof(buf))
+    {
+        nLen = sizeof(buf);
+    }
+	nSendLen = Sr_BufGet(&mSendRngId, buf, nLen);
+    SerialPort_WriteBuffer(sp, buf, nSendLen);
+
+}
+#endif
