@@ -45,20 +45,20 @@ int main(int argc, char* argv[])
     printf("Opening serial port COM%d at %d baud...\n", comPort, baudRate);
 
     
-    SerialPort_Initialize(&sp);
-    GloabalRingBufInit();
+    SerialPort_Initialize(&sp, 0x400, 0); // 初始化串口实例，设置收发缓冲区大小
+    //GloabalRingBufInit();
 
-    if (!SerialPort_OpenAsync(&sp, comPort, baudRate, PutPrmFrame, DataSent, timeoutMS)) {
+    if (!SerialPort_OpenAsync(&sp, comPort, baudRate, NULL, DataSent, timeoutMS)) {
         printf("Failed to open serial port COM%d\n", comPort);
         SerialPort_Uninitialize(&sp);
         return -1;
     }
 
-    printf("Serial port COM%d opened successfully.\n", comPort, baudRate);
+    printf("Serial port COM%d opened successfully.\n", comPort);
     printf("Press 'q' to quit.\n");
 
     while (1) {
-        ProcPrmFrame(); // 处理接收到的命令帧
+        ProcPrmFrame(sp.mRecvRngId); // 处理接收到的命令帧
 
         if (_kbhit()) {
             char ch = _getch();

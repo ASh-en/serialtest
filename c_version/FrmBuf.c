@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <memory.h>
 #include "FrmBuf.h"
 
@@ -13,115 +14,136 @@ U8 Sr_Create(SStaticRngId rngId, U8 *pBuf, U32 size)
 	rngId->pFromBuf = 0;
 	rngId->pToBuf = 0;
 	rngId->bufSize = size;
+    rngId->usedSize = 0;
 	rngId->buf = pBuf;
 
 	return TRUE;
 }
 
+SStaticRngId Sr_CreateDynamic(U32 size)
+{
+    // 一次性申请：结构体 + 缓冲区
+    SStaticRngId rngId = (SStaticRngId)malloc(sizeof(SStaticRng) + size);
+    if (!rngId)
+    {
+        return NULL;
+    }
+    rngId->pFromBuf = 0;
+    rngId->pToBuf   = 0;
+    rngId->bufSize  = size;
+    rngId->usedSize = 0;
+
+    // 缓冲区紧跟在结构体后面
+    rngId->buf = (U8*)(rngId + 1);
+
+    return rngId;
+}
+
+void Sr_DestroyDynamic(SStaticRngId rngId)
+{
+    if (rngId != NULL)
+    {
+        free(rngId);
+    }
+        
+}
+
 U32 Sr_NBytes(const SStaticRngId rngId)
 {
-	return ((rngId->pToBuf + rngId->bufSize - rngId->pFromBuf) % rngId->bufSize);
+    return rngId->usedSize;
+	//return ((rngId->pToBuf + rngId->bufSize - rngId->pFromBuf) % rngId->bufSize);
 }
 
 S32 Sr_BufPut(SStaticRngId rngId, const U8 *pBuf, S32 nbytes)
 {
-	S32 len, used;
+    if (rngId == NULL || pBuf == NULL || nbytes < 0)
+    {
+        return FALSE;
+    }
 
-	used = Sr_NBytes(rngId);
+	S32 used, free, tail;
 
-	
-	if(used + nbytes > rngId->bufSize)
-	{
-		nbytes = rngId->bufSize - used;
-	}
+	used = rngId->usedSize;
+    free = rngId->bufSize - used;
+    nbytes = (nbytes  >  free) ? free : nbytes;
 
-	if(rngId->pToBuf + nbytes < rngId->bufSize)
+	tail = rngId->bufSize - rngId->pToBuf;
+
+	if(nbytes <= tail)
 	{
 		memcpy(&rngId->buf[rngId->pToBuf], pBuf, nbytes);
 		rngId->pToBuf += nbytes;
 	}
 	else
 	{
-		len = rngId->bufSize - rngId->pToBuf;
-		memcpy(&rngId->buf[rngId->pToBuf], pBuf, len);
-		memcpy(rngId->buf, &pBuf[len], nbytes - len);
-		rngId->pToBuf = nbytes - len;
+	
+		memcpy(&rngId->buf[rngId->pToBuf], pBuf, tail);
+		memcpy(rngId->buf, &pBuf[tail], nbytes - tail);
+		rngId->pToBuf = nbytes - tail;
 	}
+    rngId->usedSize += nbytes;
 
 	return nbytes;
 }
 
-U32 Sr_BufGet(SStaticRngId rngId, U8 *pBuf, S32 maxbytes)
+S32 Sr_BufGet(SStaticRngId rngId, U8 *pBuf, S32 maxbytes)
 {
-	U32 len, used;
+    if (rngId == NULL || pBuf == NULL || maxbytes < 0)
+    {
+        return FALSE;
+    }
+    
+	U32 used, tail;
+	
+	used = rngId->usedSize;
+    maxbytes = (maxbytes > used) ? used : maxbytes;
+    tail = rngId->bufSize - rngId->pFromBuf;
 
-	if((pBuf == NULL) || (maxbytes == 0))
-	{
-		return FALSE;
-	}
-
-	used = Sr_NBytes(rngId);
-	if(maxbytes > used)
-	{
-		maxbytes = used;
-	}
-
-	if(rngId->pFromBuf + maxbytes < rngId->bufSize)
+	if(maxbytes <= tail)
 	{
 		memcpy(pBuf, &rngId->buf[rngId->pFromBuf], maxbytes);
 		rngId->pFromBuf += maxbytes;
 	}
 	else
 	{
-		len = rngId->bufSize - rngId->pFromBuf;
-		memcpy(pBuf, &rngId->buf[rngId->pFromBuf], len);
-		memcpy(&pBuf[len], rngId->buf, maxbytes - len);
-		rngId->pFromBuf = maxbytes - len;
+		memcpy(pBuf, &rngId->buf[rngId->pFromBuf], tail);
+		memcpy(&pBuf[tail], rngId->buf, maxbytes - tail);
+		rngId->pFromBuf = maxbytes - tail;
 	}
-
+    rngId->usedSize -= maxbytes;
 	return maxbytes;
 }
 
-U32 Sr_BufGetNoDel(SStaticRngId rngId, U8 *pBuf, S32 maxbytes)
+S32 Sr_BufGetNoDel(SStaticRngId rngId, U8 *pBuf, S32 maxbytes)
 {
-	U32 len, tmp;
-
+    if (rngId == NULL || pBuf == NULL || maxbytes < 0)
+    {
+        return FALSE;
+    }
+	S32 len, tmp;
 	tmp = rngId->pFromBuf;
 	len = Sr_BufGet(rngId, pBuf, maxbytes);
+    rngId->usedSize += len;
 	rngId->pFromBuf = tmp;
-
 	return len;
 }
 
-U32 Sr_BufDrop(SStaticRngId rngId, U32 size)
+S32 Sr_BufDrop(SStaticRngId rngId, S32 size)
 {
     if (rngId == NULL)
     {
         return FALSE;
     }
-
-    // 获取缓冲区中当前可用的字节数
-    U32 available = Sr_NBytes(rngId);
-
-    // 如果需要丢弃的字节数大于可用字节数，调整为可用字节数
-    if (size > available)
+    
+    U32 used = rngId->usedSize;         // 获取缓冲区中当前可用的字节数
+    size = (size > used) ? used : size; // 如果请求丢弃的字节数大于可用字节数，则调整为可用字节数
+    if (size == 0)
     {
-        size = available;
+        return 0;
     }
-
     // 计算新的指针位置，防止溢出
-    U32 newPFromBuf = rngId->pFromBuf + size;
-
-    // 如果没有回绕，直接移动指针
-    if (newPFromBuf < rngId->bufSize)
-    {
-        rngId->pFromBuf = newPFromBuf;
-    }
-    else
-    {
-        // 如果超出了缓冲区大小，回绕到缓冲区的开头
-        rngId->pFromBuf = newPFromBuf - rngId->bufSize;
-    }
+    rngId->pFromBuf = (rngId->pFromBuf + size) % rngId->bufSize;
+    rngId->usedSize -= size;
 
     return size;  // 返回丢弃的字节数
 }

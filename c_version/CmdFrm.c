@@ -1,6 +1,5 @@
 #include <stdio.h>
 #include "CmdFrm.h"
-#include "FrmBuf.h"
 #include "ProcCmd.h"
 
 
@@ -42,19 +41,16 @@ S32 PutPrmFrame(const U8 *buf, S32 dataByte)
 }
 
 
-
-
-
-
 static U32 FBufferHasExFrame(SStaticRngId rngId, U8 *buffer)
 {
-	U32 i, len;
+	S32 i, len;
 	U8 checksum;
 
 	while(Sr_BufGetNoDel(rngId, buffer, uFRAME_MIN_LEN) == uFRAME_MIN_LEN)//有最短帧长可接收
 	{
 		len = (U16)((buffer[uFRAME_LEN_H_IDX] << 8) | buffer[uFRAME_LEN_L_IDX]) + uFRAME_HE_ND_LEN;//完整帧长
 		//帧头正确且长度合法
+
 		if((buffer[0] == FRAME_HEAD)
 			&& (len >= uFRAME_MIN_LEN) && (len <= uFRAME_MAX_LEN))
 		{
@@ -83,6 +79,7 @@ static U32 FBufferHasExFrame(SStaticRngId rngId, U8 *buffer)
 					Sr_BufGet(rngId, buffer, len-uFRAME_HE_ND_LEN);//正式取数
 					Sr_BufDrop(rngId, uFRAME_END_LEN);//丢弃帧尾
                     //Frm2Cmd(buffer,Cmd,len-6);
+
 					nFrmShortCnt = 0;
 					return len;
 				}
@@ -143,20 +140,19 @@ U16 Cmd2Frm(U8 *pfrm, U8 *pcmd,U16 nByteLen)
 
 
 //主线程中轮询
-void ProcPrmFrame(void)
+void ProcPrmFrame(SStaticRngId rngId)
 {
 	U8 frmType;
 	U16 len = 0;
 
-	while((len = FBufferHasExFrame(&mRecvRngId, m_pReadBuf))> 0)
+	while((len = FBufferHasExFrame(rngId, m_pReadBuf))> 0)
 	{
 		frmType = m_pReadBuf[0];
-
+        
 		switch(frmType)
 		{
 		    case 0x11:	ProcParaCmd(m_pReadBuf, len);	break;	//0x11	参数指令
 		    case 0x22:	ProcWaveCmd(m_pReadBuf, len);	break;	//0x22	波形指令
-            
             case 0xAA:   ProcTestCmd(m_pReadBuf, len);    break;  //0xAA   测试指令
 		    //其他非法指令输出应答错误
 		    default:

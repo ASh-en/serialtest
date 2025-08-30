@@ -1,6 +1,7 @@
 #ifndef __CMDFRM_H__
 #define __CMDFRM_H__
 #include "types.h"
+#include "FrmBuf.h"
 
 #define FRAME_HEAD  (0x66)
 #define FRAME_END (0x99)
@@ -21,7 +22,7 @@
 
 void GloabalRingBufInit(void);
 S32 PutPrmFrame(const U8 *buf, S32 dataByte);
-void ProcPrmFrame(void);
+void ProcPrmFrame(SStaticRngId rngId);
 U16 Cmd2Frm(U8 *pfrm, U8 *pcmd,U16 nByteLen);
 
 #endif/*__CMDFRM_H__*/
