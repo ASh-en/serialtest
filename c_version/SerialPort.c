@@ -7,7 +7,6 @@
 #include "FrmBuf.h"
 
 
-DWORD WINAPI    SerialPort_WaitForData( LPVOID lpParam );                                               // 等待数据线程函数 
 S32             SerialPort__WriteBuffer(SerialPort* sp, const U8* pData, S32 dataLength);               // 内部写数据函数
 S32             SerialPort__ReadBuffer(SerialPort* sp, U8* pData, S32 dataLength, S32 timeOutMS);       // 内部读数据函数
 
@@ -34,6 +33,9 @@ void SerialPort_Initialize(SerialPort* sp)
     sp->timeoutMilliSeconds = 0;
     sp->workingThread = NULL;
     sp->workingThreadId = 0;
+    sp->isOpen = FALSE;
+    sp->TotalCount = 0;
+    
     InitializeCriticalSection(&sp->criticalSectionRead);
     InitializeCriticalSection(&sp->criticalSectionWrite);
 }
@@ -52,30 +54,21 @@ void SerialPort_Initialize(SerialPort* sp)
 void SerialPort_Uninitialize(SerialPort* sp)
 {
     SerialPort_Close(sp);
+    printf("Info: Total %d bytes\r\n", sp->TotalCount);
     sp->portHandle = NULL;
     sp->onDataReceivedHandler = NULL;
     sp->onDataSentHandler = NULL;
     sp->timeoutMilliSeconds = 0;
     sp->workingThread = NULL;
     sp->workingThreadId = 0; 
+    sp->isOpen = FALSE;
+    sp->TotalCount = 0;
     DeleteCriticalSection(&sp->criticalSectionRead);
     DeleteCriticalSection(&sp->criticalSectionWrite);
+
+    
 }
 
-/**
- * @fn S32 SerialPort_GetMaxTimeout(SerialPort* sp)
- * @brief 获取当前串口的最大超时时间
- *
- * 返回在 SerialPort_Open 或 SerialPort_OpenAsync 时设置的读超时时间。
- *
- * @param sp [in] 指向 SerialPort 实例的指针
- * @return 串口读超时（毫秒）
- * @note 该值仅供参考，实际读操作可指定不同的超时时间。
- */
-S32 SerialPort_GetMaxTimeout(SerialPort* sp)
-{
-    return sp->timeoutMilliSeconds;
-}
 
 /**
  * @fn BOOL    SerialPort_OpenAsync(SerialPort* sp, 
@@ -119,6 +112,25 @@ BOOL SerialPort_OpenAsync(SerialPort* sp,
     return result;
 }
 
+BOOL SerialPort_A_OpenAsync(SerialPort* sp,
+                          S32 comPortNumber, 
+                          S32 baudRate,                             
+                          SerialPort_OnDataReceived onRecv,
+                          SerialPort_OnDataSent onSent,                         
+                          S32 timeoutMS)
+{
+    BOOL result = SerialPort_A_Open(sp, comPortNumber, baudRate, timeoutMS);
+    if (result)
+    {
+        sp->onDataReceivedHandler = onRecv;
+        sp->onDataSentHandler     = onSent;
+        if (sp->onDataSentHandler || sp->onDataReceivedHandler)
+        {
+            sp->workingThread = CreateThread(NULL, 0, SerialPort_A_WaitForData, sp, 0, &sp->workingThreadId);
+        }
+    }
+    return result;
+}
 
 /**
  * @fn BOOL SerialPort_Open(SerialPort* sp, S32 comPort, S32 baudRate, S32 timeoutMS)
@@ -135,6 +147,7 @@ BOOL SerialPort_OpenAsync(SerialPort* sp,
  * @retval TRUE  打开成功
  * @retval FALSE 打开失败
  */
+
 BOOL SerialPort_Open(SerialPort* sp, S32 comPortNumber, S32 baudRate, S32 timeoutMS)
 {
     char portName[12];
@@ -162,6 +175,7 @@ BOOL SerialPort_Open(SerialPort* sp, S32 comPortNumber, S32 baudRate, S32 timeou
     if ((sp->portHandle == 0) || ((unsigned long)sp->portHandle == 0xffffffff))
     {
         sp->portHandle = 0;
+        printf("Error: Cannot open COM port %s\n", portName);
         return FALSE;
     }
 
@@ -183,17 +197,101 @@ BOOL SerialPort_Open(SerialPort* sp, S32 comPortNumber, S32 baudRate, S32 timeou
     }
 
     memset(&portTimeOuts, 0, sizeof(portTimeOuts));
-    portTimeOuts.ReadIntervalTimeout = SERIALPORT_INTERNAL_TIMEOUT;
+    portTimeOuts.ReadIntervalTimeout = MAXDWORD; // 非阻塞读
     portTimeOuts.ReadTotalTimeoutMultiplier = 0;
-    portTimeOuts.ReadTotalTimeoutConstant = SERIALPORT_INTERNAL_TIMEOUT;
+    portTimeOuts.ReadTotalTimeoutConstant = timeoutMS;  // 整体超时由参数决定
+
+  
+
+    if (!SetCommTimeouts(sp->portHandle, &portTimeOuts))
+    {
+        return FALSE;
+    }
+    sp->isOpen = TRUE;
+
+    return (sp->portHandle != 0);
+}
+
+
+BOOL SerialPort_A_Open(SerialPort* sp, S32 comPortNumber, S32 baudRate, S32 timeoutMS)
+{
+    char portName[12];
+    S32  portNameLength;
+    DCB  portSettings;
+    COMMTIMEOUTS portTimeOuts;
+
+    if (comPortNumber < 0) return FALSE;
+    if (comPortNumber > 255) return FALSE;
+    if (timeoutMS > 15000) return FALSE;
+
+    portNameLength = sprintf(portName, "\\\\.\\COM%i", comPortNumber);
+
+    // 打开串口
+    sp->portHandle = CreateFileA(
+        portName,
+        GENERIC_READ | GENERIC_WRITE,
+        0,
+        NULL,
+        OPEN_EXISTING,
+        FILE_FLAG_OVERLAPPED, //0,
+        NULL
+    );
+
+    if ((sp->portHandle == 0) || ((unsigned long)sp->portHandle == 0xffffffff))
+    {
+        sp->portHandle = 0;
+        printf("Error: Cannot open COM port %s\n", portName);
+        return FALSE;
+    }
+
+    sp->timeoutMilliSeconds = timeoutMS;
+
+    SetupComm(sp->portHandle, 4096, 4096); // 设置接收/发送缓冲区
+    PurgeComm(sp->portHandle, PURGE_RXCLEAR | PURGE_TXCLEAR); // 清空缓冲区
+
+    // 初始化 DCB
+    memset(&portSettings, 0, sizeof(portSettings));
+    portSettings.BaudRate = baudRate;
+    portSettings.ByteSize = 8;
+    portSettings.Parity   = NOPARITY;
+    portSettings.StopBits = ONESTOPBIT;
+
+    if (!SetCommState(sp->portHandle, &portSettings))
+    {
+        return FALSE;
+    }
+
+    memset(&portTimeOuts, 0, sizeof(portTimeOuts));
+    portTimeOuts.ReadIntervalTimeout = MAXDWORD; // 非阻塞读
+    portTimeOuts.ReadTotalTimeoutMultiplier = 0;
+    portTimeOuts.ReadTotalTimeoutConstant = 0;  // 整体超时由参数决定
+
+    //OVERLAPPED olRead = {0};
+    //olRead.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);  // 自动重置事件
 
     if (!SetCommTimeouts(sp->portHandle, &portTimeOuts))
     {
         return FALSE;
     }
 
+
+    // 创建事件 & 绑定 OVERLAPPED
+    sp->hEventRead  = CreateEvent(NULL, TRUE, FALSE, NULL);
+    sp->hEventWrite = CreateEvent(NULL, TRUE, FALSE, NULL);
+
+    ZeroMemory(&sp->olRead, sizeof(OVERLAPPED));
+    ZeroMemory(&sp->olWrite, sizeof(OVERLAPPED));
+    sp->olRead.hEvent  = sp->hEventRead;
+    sp->olWrite.hEvent = sp->hEventWrite;
+
+    sp->isOpen = TRUE;
+
     return (sp->portHandle != 0);
 }
+
+
+
+
 
 /**
  * @fn void SerialPort_Close(SerialPort* sp)
@@ -210,7 +308,7 @@ void SerialPort_Close(SerialPort* sp)
     EnterCriticalSection(&sp->criticalSectionWrite);
 
     
-
+    sp->isOpen = FALSE;
     if (sp->portHandle)
     {
         CloseHandle(sp->portHandle);
@@ -220,6 +318,19 @@ void SerialPort_Close(SerialPort* sp)
 
     LeaveCriticalSection(&sp->criticalSectionRead);
     LeaveCriticalSection(&sp->criticalSectionWrite);
+
+
+    if (sp->hEventRead)  
+    {
+        CloseHandle(sp->hEventRead);
+        sp->hEventRead = NULL;
+    }
+    if (sp->hEventWrite) 
+    {
+        CloseHandle(sp->hEventWrite);
+        sp->hEventWrite = NULL;
+    }
+
     // 等待线程退出
     if (sp->workingThread)
     { 
@@ -228,25 +339,13 @@ void SerialPort_Close(SerialPort* sp)
         sp->workingThread = NULL;
         sp->workingThreadId = 0;
     }
-
-    
 }
 
 
-/**
- * @fn BOOL SerialPort_IsOpen(SerialPort* sp)
- * @brief 判断串口是否已打开
- *
- * 检查串口句柄是否有效。
- *
- * @param sp [in] 串口实例
- * @retval TRUE  已打开
- * @retval FALSE 未打开
- */
-BOOL SerialPort_IsOpen(SerialPort* sp)
-{
-    return (sp->portHandle != NULL);
-}
+
+
+
+
 
 
 /**
@@ -291,54 +390,13 @@ S32 SerialPort__WriteBuffer(SerialPort* sp, const U8* pData, S32 dataLength)
  */
 S32 SerialPort__ReadBuffer(SerialPort* sp, U8* pData, S32 dataLength, S32 timeOutMS)
 {
-    DWORD bytesRead, bytesReadTotal;
-    S32   timeOutCounter;
-
+    DWORD bytesRead = 0;
     if (sp->portHandle == NULL)
         return 0;
-
-    if (timeOutMS < 0)
-        timeOutMS = sp->timeoutMilliSeconds;
-
-    bytesRead = 0;
-    bytesReadTotal = 0;
-    timeOutCounter = timeOutMS;
-    // 超时时间非常短，直接睡眠等待一次读取
-    if (timeOutMS < SERIALPORT_INTERNAL_TIMEOUT*2)
-    {
-        Sleep(timeOutMS);
-        ReadFile(sp->portHandle, pData, dataLength, &bytesRead, NULL);
-        bytesReadTotal += bytesRead;
-    } 
-    else 
-    {
-        // 循环读取数据，直到超时或读取完成
-        while (timeOutCounter > 0)
-        {            
-            bytesRead = 0;
-            // 从串口读取数据
-            ReadFile(sp->portHandle, pData+bytesReadTotal, dataLength, &bytesRead, NULL);
-            if (bytesRead)
-            {
-                // 更新剩余读取长度和总读取字节数                                
-                dataLength     -= bytesRead;
-                bytesReadTotal += bytesRead;
-                if (dataLength == 0) break;                             // 全部读取完成，退出循环
-                timeOutCounter = timeOutMS;                             // 重新设置超时计数  
-            } 
-            else 
-            {
-                timeOutCounter -= SERIALPORT_INTERNAL_TIMEOUT;          // 减少等待计数
-            }
-        }
-    }
-    static U32 TotalCount = 0;
-    if (bytesReadTotal > 0)
-    {
-        TotalCount += bytesReadTotal;
-        printf("Info: Read %d bytes, Total %d bytes\r\n", bytesReadTotal, TotalCount);
-    }
-    return bytesReadTotal;                                              // 返回实际读取的字节数
+    ReadFile(sp->portHandle, pData, dataLength, &bytesRead, NULL);
+ 
+    
+    return bytesRead;                                              // 返回实际读取的字节数
 }
 
 
@@ -363,7 +421,9 @@ S32 SerialPort_ReadBuffer(SerialPort* sp, U8* pData, S32 dataLength, S32 timeOut
     S32 result;
     EnterCriticalSection(&sp->criticalSectionRead);                     // 进入读操作临界区，保证同一时间只有一个线程访问串口读取
     result = SerialPort__ReadBuffer(sp, pData, dataLength, timeOutMS);  // 调用低级读取函数，实际从串口获取数据
-    LeaveCriticalSection(&sp->criticalSectionRead);                     // 离开读操作临界区，允许其他线程访问串口
+    LeaveCriticalSection(&sp->criticalSectionRead);                     // 离开读操作临界区，允许其他线程访问串口读取或关闭串口
+    
+    sp->TotalCount += result;
     return result;                                                      // 返回读取到的字节数
 }
 
@@ -395,85 +455,35 @@ S32 SerialPort_WriteBuffer(SerialPort* sp, const U8* pData, S32 dataLength)
     }
     return result;                  // 返回实际写入的字节数    
 }
-/**
- * @fn S32 SerialPort_WriteLine(SerialPort* sp, char* pLine, BOOL addCRatEnd)
- * @brief 写入一行字符串
- *
- * 向串口发送一行字符串，可选自动附加回车符 (CR)。
- * 线程安全。
- *
- * @param sp        [in] 串口实例
- * @param pLine     [in] 字符串
- * @param addCRatEnd [in] 是否在末尾添加 CR (0x0D)
- * @return S32
- *         - 实际写入的字节数
- *         - 0 表示串口未打开或输入无效
- */
-S32 SerialPort_WriteLine(SerialPort* sp, char* pLine, BOOL addCRatEnd)
+
+
+// =============================
+// 异步写
+// =============================
+S32 SerialPort_A_WriteBuffer(SerialPort* sp, const U8* data, S32 length)
 {
-    S32 lineLength, result;
+    DWORD bytesWritten = 0;
+    BOOL ok = WriteFile(
+        sp->portHandle,
+        data,
+        length,
+        &bytesWritten,
+        &sp->olWrite
+    );
 
-    if (sp->portHandle == NULL)
-        return 0;
-    if (pLine == NULL)
-        return 0;
-
-    lineLength = strlen(pLine);
-    if (lineLength == 0)
-        return 0;
-
-    EnterCriticalSection(&sp->criticalSectionWrite);
-    result = SerialPort__WriteBuffer(sp, (U8*)pLine, lineLength);
-    if (addCRatEnd && pLine[lineLength-1] != 0x0D)
+    if (!ok && GetLastError() == ERROR_IO_PENDING) 
     {
-        char cr = 13;
-        result += SerialPort__WriteBuffer(sp, (U8*)&cr, 1);
+        WaitForSingleObject(sp->hEventWrite, INFINITE);
+        GetOverlappedResult(sp->portHandle, &sp->olWrite, &bytesWritten, FALSE);
     }
-    LeaveCriticalSection(&sp->criticalSectionWrite);
 
-    if (sp->onDataSentHandler)
+    if (bytesWritten > 0 && sp->onDataSentHandler) 
     {
-        sp->onDataSentHandler(pLine, result);
+        sp->onDataSentHandler(data, bytesWritten);
     }
-        
-    return result;
+
+    return (S32)bytesWritten;
 }
-
-
-
-/**
- * @fn S32 SerialPort_ReadLine(SerialPort* sp, char* pLine, S32 maxBufferSize, S32 timeOutMS)
- * @brief 读取一行字符串
- *
- * 从串口读取数据，存入缓冲区并在末尾自动添加 '\0'。
- * 线程安全。
- *
- * @param sp            [in] 串口实例
- * @param pLine         [out] 缓冲区
- * @param maxBufferSize [in] 缓冲区大小
- * @param timeOutMS     [in] 超时时间（ms）
- * @return S32
- *         - 实际读取的字节数（不包括末尾的 '\0'）
- *         - 0 表示串口未打开或输入无效
- */
-S32 SerialPort_ReadLine(SerialPort* sp, char* pLine, S32 maxBufferSize, S32 timeOutMS)
-{
-    S32 result;
-    if (sp->portHandle == NULL)
-        return 0;
-    if (pLine == NULL)
-        return 0;
-
-    EnterCriticalSection(&sp->criticalSectionRead);
-    result = SerialPort__ReadBuffer(sp, (U8*)pLine, maxBufferSize-1, timeOutMS);
-    if (result < maxBufferSize)
-    {
-        pLine[result] = 0;
-    }
-    LeaveCriticalSection(&sp->criticalSectionRead);
-    return result;
-}
-
 
 
 /**
@@ -495,7 +505,7 @@ DWORD WINAPI SerialPort_WaitForData(LPVOID lpParam)
     S32 bytesRead = 0;                                  // 实际读取字节数
 
     // 循环监听串口，只要串口处于打开状态
-    while (SerialPort_IsOpen(sp))
+    while (sp->isOpen)
     {
         bytesRead = SerialPort_ReadBuffer(sp, packet, packetSize, SERIALPORT_INTERNAL_TIMEOUT);         // 从串口读取数据，超时使用 SERIALPORT_INTERNAL_TIMEOUT
         if (bytesRead)
@@ -511,5 +521,48 @@ DWORD WINAPI SerialPort_WaitForData(LPVOID lpParam)
 
 
 
+// =============================
+// 异步接收线程
+// =============================
+DWORD WINAPI SerialPort_A_WaitForData(LPVOID lpParam)
+{
+    SerialPort* sp = (SerialPort*)lpParam;
+    U8 buffer[64];
+    DWORD bytesRead = 0;
+
+    while (sp->isOpen) 
+    {
+        ResetEvent(sp->hEventRead);
+
+        BOOL ok = ReadFile(
+            sp->portHandle,
+            buffer,
+            sizeof(buffer),
+            &bytesRead,
+            &sp->olRead   // ✅ 异步
+        );
+
+        if (!ok && GetLastError() == ERROR_IO_PENDING) 
+        {
+            // 等待完成
+            DWORD waitRes = WaitForSingleObject(sp->hEventRead, sp->timeoutMilliSeconds);
+            if (waitRes == WAIT_OBJECT_0) 
+            {
+                GetOverlappedResult(sp->portHandle, &sp->olRead, &bytesRead, FALSE);
+            } else if (waitRes == WAIT_TIMEOUT) 
+            {
+                continue; // 超时，无数据
+            }
+        }
+
+        sp->TotalCount += bytesRead;
+
+        if (bytesRead > 0 && sp->onDataReceivedHandler) 
+        {
+            sp->onDataReceivedHandler(buffer, bytesRead);
+        }
+    }
+    return 0;
+}
 
 

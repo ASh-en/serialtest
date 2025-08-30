@@ -7,21 +7,28 @@
 #include "SerialPort.h"
 #include "ProcCmd.h"
 extern SerialPort sp;  // 串口实例对象
-
+static U32 count = 0;
+static U32 TotalCount = 0;
 /* 数据发送完成回调 */
 void DataSent(const U8* pData, S32 dataLength)
+{
+    
+    TotalCount += dataLength;
+    count++; 
+}
+S32 DataRecv(const U8* pData, S32 dataLength)
 {
     static U32 count = 0;
     static U32 TotalCount = 0;
     TotalCount += dataLength;
-    printf("Count %d, Info: Data sent %d bytes, Total %d bytes\r\n", ++count, dataLength, TotalCount);
-
+    printf("Count %d, Info: Data received %d bytes, Total %d bytes\r\n", ++count, dataLength, TotalCount);  
+    return 0;
 }
 
 /* 程序入口 */
 int main(int argc, char* argv[])
 {
-    int comPort   = 5;       // 默认 COM5
+    int comPort   = 4;       // 默认 COM5
     int baudRate  = 115200;  // 默认波特率
     int timeoutMS = 50;      // 默认超时时间
 
@@ -60,8 +67,9 @@ int main(int argc, char* argv[])
             }
         }
 
-        Sleep(10); // 降低 CPU 占用
+        Sleep(1); // 降低 CPU 占用
     }
+    printf("Count %d, Info: Data sent  Total %d bytes\r\n", count, TotalCount);
 
     SerialPort_Close(&sp);
     SerialPort_Uninitialize(&sp);
