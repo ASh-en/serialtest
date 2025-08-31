@@ -20,9 +20,18 @@
 #define uFRAME_MIN_LEN 			(uFRAME_HEAD_LEN+MIN_CMD_LEN+uFRAME_END_LEN)	//传输帧最小长度
 #define uFRAME_MAX_LEN			(uFRAME_HEAD_LEN+MAX_CMD_LEN+uFRAME_END_LEN)	//传输帧最大长度
 
+typedef enum
+{
+    FB_STATE_FIND_HEAD = 0, // 找帧头
+    FB_STATE_WAIT_LEN,      // 等长度字段
+    FB_STATE_WAIT_AND_CHECK_FRAME,    // 等完整帧并校验帧
+} FrameBufState;
+
+
+
 void GloabalRingBufInit(void);
 S32 PutPrmFrame(const U8 *buf, S32 dataByte);
-void ProcPrmFrame(SStaticRngId rngId);
+void ProcPrmFrame(SStaticRngId rngId, U8 asyncMode);
 U16 Cmd2Frm(U8 *pfrm, U8 *pcmd,U16 nByteLen);
 
 #endif/*__CMDFRM_H__*/

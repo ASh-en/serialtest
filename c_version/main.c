@@ -6,9 +6,11 @@
 #include "CmdFrm.h"
 #include "SerialPort.h"
 #include "ProcCmd.h"
+#include "AsyncFrame.h"
 extern SerialPort sp;  // 串口实例对象
 static U32 count = 0;
 static U32 TotalCount = 0;
+U32 frameCount = 0;
 /* 数据发送完成回调 */
 void DataSent(const U8* pData, S32 dataLength)
 {
@@ -45,20 +47,23 @@ int main(int argc, char* argv[])
     printf("Opening serial port COM%d at %d baud...\n", comPort, baudRate);
 
     
-    SerialPort_Initialize(&sp, 0x400, 0); // 初始化串口实例，设置收发缓冲区大小
+    SerialPort_Init(&sp, 0x4000, 0); // 初始化串口实例，设置收发缓冲区大小
     //GloabalRingBufInit();
+    AsyncFrame_Init();       // 初始化异步帧处理模块
 
     if (!SerialPort_OpenAsync(&sp, comPort, baudRate, NULL, DataSent, timeoutMS)) {
         printf("Failed to open serial port COM%d\n", comPort);
-        SerialPort_Uninitialize(&sp);
+        SerialPort_Uninit(&sp);
         return -1;
     }
-
+    
     printf("Serial port COM%d opened successfully.\n", comPort);
     printf("Press 'q' to quit.\n");
-
+    
+    
+    
     while (1) {
-        ProcPrmFrame(sp.mRecvRngId); // 处理接收到的命令帧
+        ProcPrmFrame(sp.mRecvRngId, 1); // 处理接收到的命令帧
 
         if (_kbhit()) {
             char ch = _getch();
@@ -67,12 +72,14 @@ int main(int argc, char* argv[])
             }
         }
 
-        Sleep(1); // 降低 CPU 占用
+        //Sleep(1); // 降低 CPU 占用
     }
     printf("Count %d, Info: Data sent  Total %d bytes\r\n", count, TotalCount);
+    printf("Frame Count %d \n", frameCount);
 
     SerialPort_Close(&sp);
-    SerialPort_Uninitialize(&sp);
+    SerialPort_Uninit(&sp);
+    AsyncFrame_Uninit();
 
     printf("Serial port closed. Exiting program.\n");
     return 0;

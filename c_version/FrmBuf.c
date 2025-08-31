@@ -4,9 +4,9 @@
 #include "FrmBuf.h"
 
 
-U8 Sr_Create(SStaticRngId rngId, U8 *pBuf, U32 size)
+S8 Sr_Create(SStaticRngId rngId, U8 *pBuf, U32 size)
 {
-	if(rngId == NULL || pBuf == NULL)
+	if(rngId == NULL || pBuf == NULL || size == 0)
 	{
 		return FALSE;
 	}
@@ -15,13 +15,34 @@ U8 Sr_Create(SStaticRngId rngId, U8 *pBuf, U32 size)
 	rngId->pToBuf = 0;
 	rngId->bufSize = size;
     rngId->usedSize = 0;
+    InitializeCriticalSection(&rngId->lock); 
 	rngId->buf = pBuf;
 
 	return TRUE;
 }
 
+void Sr_Destroy(SStaticRngId rngId)
+{
+    if (rngId == NULL)
+    {
+        return ;
+    }
+    rngId->pFromBuf = 0;
+	rngId->pToBuf = 0;
+	rngId->bufSize = 0;
+    rngId->usedSize = 0; 
+    DeleteCriticalSection(&rngId->lock); 
+    rngId->buf = NULL;
+    return ;
+        
+}
+
 SStaticRngId Sr_CreateDynamic(U32 size)
 {
+    if (size == 0)
+    {
+        return NULL;
+    }
     // 一次性申请：结构体 + 缓冲区
     SStaticRngId rngId = (SStaticRngId)malloc(sizeof(SStaticRng) + size);
     if (!rngId)
@@ -31,6 +52,7 @@ SStaticRngId Sr_CreateDynamic(U32 size)
     rngId->pFromBuf = 0;
     rngId->pToBuf   = 0;
     rngId->bufSize  = size;
+    InitializeCriticalSection(&rngId->lock); 
     rngId->usedSize = 0;
 
     // 缓冲区紧跟在结构体后面
@@ -39,10 +61,13 @@ SStaticRngId Sr_CreateDynamic(U32 size)
     return rngId;
 }
 
+
+
 void Sr_DestroyDynamic(SStaticRngId rngId)
 {
     if (rngId != NULL)
     {
+        DeleteCriticalSection(&rngId->lock); 
         free(rngId);
     }
         
@@ -50,101 +75,131 @@ void Sr_DestroyDynamic(SStaticRngId rngId)
 
 U32 Sr_NBytes(const SStaticRngId rngId)
 {
-    return rngId->usedSize;
+    EnterCriticalSection(&rngId->lock);
+    U32 used = rngId->usedSize;
+    LeaveCriticalSection(&rngId->lock);
+    return used;
 	//return ((rngId->pToBuf + rngId->bufSize - rngId->pFromBuf) % rngId->bufSize);
 }
 
-S32 Sr_BufPut(SStaticRngId rngId, const U8 *pBuf, S32 nbytes)
+S32 Sr_BufPut(SStaticRngId rngId, const U8 *pBuf, U32 putbytes)
 {
-    if (rngId == NULL || pBuf == NULL || nbytes < 0)
+    if (rngId == NULL || pBuf == NULL || putbytes == 0)
     {
-        return FALSE;
+        return -1;
     }
+    EnterCriticalSection(&rngId->lock); // 加锁
+	U32 free, tail;
 
-	S32 used, free, tail;
-
-	used = rngId->usedSize;
-    free = rngId->bufSize - used;
-    nbytes = (nbytes  >  free) ? free : nbytes;
+    free = rngId->bufSize - rngId->usedSize;
+    putbytes = (putbytes  >  free) ? free : putbytes;
 
 	tail = rngId->bufSize - rngId->pToBuf;
 
-	if(nbytes <= tail)
+	if(putbytes <= tail)
 	{
-		memcpy(&rngId->buf[rngId->pToBuf], pBuf, nbytes);
-		rngId->pToBuf += nbytes;
+		memcpy(&rngId->buf[rngId->pToBuf], pBuf, putbytes);
+		rngId->pToBuf = (rngId->pToBuf + putbytes) % rngId->bufSize;
+        
 	}
 	else
 	{
 	
 		memcpy(&rngId->buf[rngId->pToBuf], pBuf, tail);
-		memcpy(rngId->buf, &pBuf[tail], nbytes - tail);
-		rngId->pToBuf = nbytes - tail;
+		memcpy(rngId->buf, &pBuf[tail], putbytes - tail);
+		rngId->pToBuf = (putbytes - tail) % rngId->bufSize;
 	}
-    rngId->usedSize += nbytes;
-
-	return nbytes;
+    rngId->usedSize += putbytes;
+    if(rngId->usedSize > rngId->bufSize)
+    {
+        printf("Sr_BufPut error: usedSize overflow!\n");
+        rngId->usedSize = rngId->bufSize; // 防止溢出
+    }
+    LeaveCriticalSection(&rngId->lock); // 解锁
+	return (S32)putbytes;
 }
 
-S32 Sr_BufGet(SStaticRngId rngId, U8 *pBuf, S32 maxbytes)
+S32 Sr_BufGet(SStaticRngId rngId, U8 *pBuf, U32 getbytes)
 {
-    if (rngId == NULL || pBuf == NULL || maxbytes < 0)
+    if (rngId == NULL || pBuf == NULL || getbytes == 0)
     {
-        return FALSE;
+        return -1;
     }
-    
+    EnterCriticalSection(&rngId->lock); // 加锁
 	U32 used, tail;
 	
 	used = rngId->usedSize;
-    maxbytes = (maxbytes > used) ? used : maxbytes;
+    getbytes = (getbytes > used) ? used : getbytes;
     tail = rngId->bufSize - rngId->pFromBuf;
 
-	if(maxbytes <= tail)
+	if(getbytes <= tail)
 	{
-		memcpy(pBuf, &rngId->buf[rngId->pFromBuf], maxbytes);
-		rngId->pFromBuf += maxbytes;
+		memcpy(pBuf, &rngId->buf[rngId->pFromBuf], getbytes);
+		rngId->pFromBuf = (rngId->pFromBuf + getbytes) % rngId->bufSize;
+
 	}
 	else
 	{
 		memcpy(pBuf, &rngId->buf[rngId->pFromBuf], tail);
-		memcpy(&pBuf[tail], rngId->buf, maxbytes - tail);
-		rngId->pFromBuf = maxbytes - tail;
+		memcpy(&pBuf[tail], rngId->buf, getbytes - tail);
+		rngId->pFromBuf = (getbytes - tail) % rngId->bufSize;
 	}
-    rngId->usedSize -= maxbytes;
-	return maxbytes;
+    rngId->usedSize -= getbytes;
+    if(rngId->usedSize < 0)
+    {
+        printf("Sr_BufGet error: usedSize underflow!\n");
+        rngId->usedSize = 0; // 防止溢出
+    }
+    LeaveCriticalSection(&rngId->lock); // 解锁
+	return (S32)getbytes;
 }
 
-S32 Sr_BufGetNoDel(SStaticRngId rngId, U8 *pBuf, S32 maxbytes)
+S32 Sr_BufGetNoDel(SStaticRngId rngId, U8 *pBuf, U32 getbytes)
 {
-    if (rngId == NULL || pBuf == NULL || maxbytes < 0)
+    if (rngId == NULL || pBuf == NULL || getbytes == 0)
     {
-        return FALSE;
+        return -1;
     }
-	S32 len, tmp;
-	tmp = rngId->pFromBuf;
-	len = Sr_BufGet(rngId, pBuf, maxbytes);
-    rngId->usedSize += len;
-	rngId->pFromBuf = tmp;
-	return len;
-}
+    EnterCriticalSection(&rngId->lock); 
+	U32 used, tail;
 
-S32 Sr_BufDrop(SStaticRngId rngId, S32 size)
-{
-    if (rngId == NULL)
-    {
-        return FALSE;
-    }
+    used = rngId->usedSize;
+    getbytes = (getbytes > used) ? used : getbytes;
+    tail = rngId->bufSize - rngId->pFromBuf;
+
+	if(getbytes <= tail)
+	{
+		memcpy(pBuf, &rngId->buf[rngId->pFromBuf], getbytes);
+	}
+	else
+	{
+		memcpy(pBuf, &rngId->buf[rngId->pFromBuf], tail);
+		memcpy(&pBuf[tail], rngId->buf, getbytes - tail);
+	}
     
-    U32 used = rngId->usedSize;         // 获取缓冲区中当前可用的字节数
-    size = (size > used) ? used : size; // 如果请求丢弃的字节数大于可用字节数，则调整为可用字节数
-    if (size == 0)
-    {
-        return 0;
-    }
-    // 计算新的指针位置，防止溢出
-    rngId->pFromBuf = (rngId->pFromBuf + size) % rngId->bufSize;
-    rngId->usedSize -= size;
+    LeaveCriticalSection(&rngId->lock); // 解锁
+	return (S32)getbytes;
+}
 
-    return size;  // 返回丢弃的字节数
+S32 Sr_BufDrop(SStaticRngId rngId, U32 dropbytes)
+{
+    if (rngId == NULL || dropbytes == 0)
+    {
+        return -1;
+    }
+    EnterCriticalSection(&rngId->lock); // 加锁
+    U32 used = rngId->usedSize;         // 获取缓冲区中当前可用的字节数
+    dropbytes = (dropbytes > used) ? used : dropbytes; // 如果请求丢弃的字节数大于可用字节数，则调整为可用字节数
+    
+    // 计算新的指针位置，防止溢出
+    rngId->pFromBuf = (rngId->pFromBuf + dropbytes) % rngId->bufSize;
+    rngId->usedSize -= dropbytes;
+    if(rngId->usedSize < 0)
+    {
+        printf("Sr_BufDrop error: usedSize underflow!\n");
+        rngId->usedSize = 0; // 防止溢出
+    }
+    LeaveCriticalSection(&rngId->lock); // 解锁
+    return dropbytes;  // 返回丢弃的字节数
 }
 

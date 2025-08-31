@@ -24,7 +24,7 @@ S32             SerialPort__ReadBuffer(SerialPort* sp, U8* pData, S32 dataLength
  * @note 对应的资源释放由 SerialPort_Uninitialize() 完成。
  */
 
-void SerialPort_Initialize(SerialPort* sp, U32 recvBufSize, U32 sendBufSize) 
+void SerialPort_Init(SerialPort* sp, U32 recvBufSize, U32 sendBufSize) 
 {
     sp->portHandle = NULL;
     sp->onDataReceivedHandler = NULL;
@@ -47,6 +47,8 @@ void SerialPort_Initialize(SerialPort* sp, U32 recvBufSize, U32 sendBufSize)
         sp->mSendRngId = Sr_CreateDynamic(sendBufSize);
     }
 
+    
+
 }
 
 
@@ -60,7 +62,7 @@ void SerialPort_Initialize(SerialPort* sp, U32 recvBufSize, U32 sendBufSize)
  * @param sp [in/out] 指向 SerialPort 实例的指针
  * @note 该函数会调用 SerialPort_Close() 以确保串口关闭。
  */
-void SerialPort_Uninitialize(SerialPort* sp)
+void SerialPort_Uninit(SerialPort* sp)
 {
     SerialPort_Close(sp);
     printf("Info: Total %d bytes\r\n", sp->TotalCount);
@@ -83,7 +85,7 @@ void SerialPort_Uninitialize(SerialPort* sp)
     {
         Sr_DestroyDynamic(sp->mSendRngId);
         sp->mSendRngId = NULL;
-    }   
+    } 
     
 }
 
@@ -178,9 +180,11 @@ BOOL SerialPort_Open(SerialPort* sp, S32 comPortNumber, S32 baudRate, S32 timeou
         return FALSE;
     }
 
+    
+
     sp->timeoutMilliSeconds = timeoutMS;
 
-    SetupComm(sp->portHandle, 4096, 4096); // 设置接收/发送缓冲区
+    SetupComm(sp->portHandle, 409600, 409600); // 设置接收/发送缓冲区
     PurgeComm(sp->portHandle, PURGE_RXCLEAR | PURGE_TXCLEAR); // 清空缓冲区
 
     // 初始化 DCB
@@ -275,6 +279,7 @@ void SerialPort_Close(SerialPort* sp)
 S32 SerialPort_WriteBuffer(SerialPort* sp, const U8* data, S32 length)
 {
     DWORD bytesWritten = 0;
+
     BOOL ok = WriteFile(
         sp->portHandle,
         data,
@@ -289,6 +294,7 @@ S32 SerialPort_WriteBuffer(SerialPort* sp, const U8* data, S32 length)
         GetOverlappedResult(sp->portHandle, &sp->olWrite, &bytesWritten, FALSE);
     }
 
+
     if (bytesWritten > 0 && sp->onDataSentHandler) 
     {
         sp->onDataSentHandler(data, bytesWritten);
@@ -302,7 +308,7 @@ S32 SerialPort_WriteBuffer(SerialPort* sp, const U8* data, S32 length)
 DWORD WINAPI SerialPort_WaitForData(LPVOID lpParam)
 {
     SerialPort* sp = (SerialPort*)lpParam;
-    U8 buffer[64];
+    U8 buffer[256];
     DWORD bytesRead = 0;
 
     while (sp->isOpen) 
@@ -331,13 +337,14 @@ DWORD WINAPI SerialPort_WaitForData(LPVOID lpParam)
         }
 
         sp->TotalCount += bytesRead;
-
+        
         if (bytesRead > 0 && sp->mRecvRngId != NULL && sp->mRecvRngId->buf != NULL)
         {
             U32 result = Sr_BufPut(sp->mRecvRngId, buffer, bytesRead); // 默认放入接收缓冲区
             //printf("Info: Put %d bytes to recv buffer, Total %d bytes\r\n", result, sp->TotalCount);
             //printf("Info: Data received %d bytes, Total %d bytes\r\n", bytesRead, sp->TotalCount);
         }
+    
 
         if (bytesRead > 0 && sp->onDataReceivedHandler) 
         {

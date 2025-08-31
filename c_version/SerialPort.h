@@ -33,14 +33,16 @@ typedef struct SerialPort
 
     SStaticRngId mRecvRngId;                        // 接收环形缓冲区
     SStaticRngId mSendRngId;                        // 发送环形缓冲区
+
+
     
 
     U32 TotalCount;                                     // 统计总字节数
 } SerialPort;
 
 /* 初始化与销毁 */
-void    SerialPort_Initialize(SerialPort* sp, U32 recvBufSize, U32 sendBufSize);
-void    SerialPort_Uninitialize(SerialPort* sp);
+void    SerialPort_Init(SerialPort* sp, U32 recvBufSize, U32 sendBufSize);
+void    SerialPort_Uninit(SerialPort* sp);
 
 /* 打开与关闭 */
 BOOL    SerialPort_OpenAsync(SerialPort* sp,

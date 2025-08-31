@@ -3,8 +3,7 @@
 #include "CmdFrm.h"
 SerialPort sp;  // 串口实例对象
 
-
-U8 ProcTemplateCmd(const U8 *pCmd, U16 len)//pCmd为接收到的命令,len为pCmd的长度，防止越界访问
+S32 ProcTemplateCmd(const U8 *pCmd, U32 len)//pCmd为接收到的命令,len为pCmd的长度，防止越界访问
 {
 	U16 i,nSendLen, idx = 0;        //从0位置直接开始填入具体数据。
 	U8 nDataAns[6] = {0};           //除特殊的命令外，应答基本为6个字节，根据具体反馈命令可修改
@@ -24,7 +23,7 @@ U8 ProcTemplateCmd(const U8 *pCmd, U16 len)//pCmd为接收到的命令,len为pCm
 	return TRUE;
 }
 
-U8 ProcParaCmd(const U8 *pCmd, U16 len)
+S32 ProcParaCmd(const U8 *pCmd, U32 len)
 {
     U16 i,nSendLen, idx = 0;        //从0位置直接开始填入具体数据。
     U8 nDataAns[6] = {0};           //除特殊的命令外，应答基本为6个字节，根据具体反馈命令可修改
@@ -47,7 +46,7 @@ U8 ProcParaCmd(const U8 *pCmd, U16 len)
 }
 
 
-U8 ProcWaveCmd(const U8 *pCmd, U16 len)//0x22	波形指令
+S32 ProcWaveCmd(const U8 *pCmd, U32 len)//0x22	波形指令
 {
     U16 i,nSendLen, idx = 0;        //从0位置直接开始填入具体数据。
     U8 nDataAns[6] = {0};           //除特殊的命令外，应答基本为6个字节，根据具体反馈命令可修改
@@ -71,7 +70,7 @@ U8 ProcWaveCmd(const U8 *pCmd, U16 len)//0x22	波形指令
 
 
 
-U8 ProcErrorCmd(const U8 *pCmd, U16 len)
+S32 ProcErrorCmd(const U8 *pCmd, U32 len)
 {
     U16 i,nSendLen, idx = 0;        //从0位置直接开始填入具体数据。
     U8 nDataAns[6] = {0};           //除特殊的命令外，应答基本为6个字节，根据具体反馈命令可修改
@@ -92,7 +91,7 @@ U8 ProcErrorCmd(const U8 *pCmd, U16 len)
     SendCmdAns(&sp, Frm, nSendLen);      //写入串口
     return TRUE;
 }
-U8 ProcTestCmd(const U8 *pCmd, U16 len)
+S32 ProcTestCmd(const U8 *pCmd, U32 len)
 {
     U16 i,nSendLen, idx = 0;        //从0位置直接开始填入具体数据。
     U8 nDataAns[6] = {0};           //除特殊的命令外，应答基本为6个字节，根据具体反馈命令可修改
