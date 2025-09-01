@@ -184,7 +184,7 @@ BOOL SerialPort_Open(SerialPort* sp, S32 comPortNumber, S32 baudRate, S32 timeou
 
     sp->timeoutMilliSeconds = timeoutMS;
 
-    SetupComm(sp->portHandle, 409600, 409600); // 设置接收/发送缓冲区
+    SetupComm(sp->portHandle, 40960, 40960); // 设置接收/发送缓冲区
     PurgeComm(sp->portHandle, PURGE_RXCLEAR | PURGE_TXCLEAR); // 清空缓冲区
 
     // 初始化 DCB

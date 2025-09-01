@@ -47,7 +47,7 @@ int main(int argc, char* argv[])
     printf("Opening serial port COM%d at %d baud...\n", comPort, baudRate);
 
     
-    SerialPort_Init(&sp, 0x4000, 0); // 初始化串口实例，设置收发缓冲区大小
+    SerialPort_Init(&sp, 0x40000, 0); // 初始化串口实例，设置收发缓冲区大小
     //GloabalRingBufInit();
     AsyncFrame_Init();       // 初始化异步帧处理模块
 

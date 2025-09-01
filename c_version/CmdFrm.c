@@ -125,103 +125,116 @@ static U32 FBufferHasExFrame(SStaticRngId rngId, U8 *buffer)
     static S32 expectedLen = 0; // 当前帧的期望长度
     U32 available = Sr_NBytes(rngId);
 
-    if(available < uFRAME_MIN_LEN)
+    if (available < uFRAME_MIN_LEN)
     {
         return 0; // 可用数据不足以构成最小帧
     }
-    
-    switch (state)
+
+    while (1) // 循环驱动状态迁移
     {
-    case FB_STATE_FIND_HEAD:
-        // 找帧头
-        while (available >= 1)
+        switch (state)
         {
-            Sr_BufGetNoDel(rngId, buffer, 1);
-            if (buffer[0] == FRAME_HEAD)
+        case FB_STATE_FIND_HEAD:
+            while (available >= 1)
             {
-                // 找到帧头，进入下一状态
-                state = FB_STATE_WAIT_LEN;
-                break;
-            }
-            else
-            {
-                Sr_BufDrop(rngId, 1); // 丢掉垃圾字节
-                available--;
-            }
-        }
-        break;
-
-    case FB_STATE_WAIT_LEN:
-        if (available >= uFRAME_MIN_LEN)
-        {
-            Sr_BufGetNoDel(rngId, buffer, uFRAME_MIN_LEN);
-            expectedLen = ((buffer[uFRAME_LEN_H_IDX] << 8) | buffer[uFRAME_LEN_L_IDX]) + uFRAME_HE_ND_LEN;
-
-            if (expectedLen < uFRAME_MIN_LEN || expectedLen > uFRAME_MAX_LEN)
-            {
-                // 长度非法，回到找帧头
-                Sr_BufDrop(rngId, 1);
-                expectedLen = 0;
-                state = FB_STATE_FIND_HEAD;
-            }
-            else
-            {
-                state = FB_STATE_WAIT_AND_CHECK_FRAME;
-            }
-        }
-        break;
-
-    case FB_STATE_WAIT_AND_CHECK_FRAME:
-        if (available >= (U32)expectedLen)
-        {
-            // 可以取出完整帧
-            Sr_BufGetNoDel(rngId, buffer, expectedLen);
-            if(buffer[expectedLen-1] != FRAME_END)
-            {
-                // 帧尾错误，丢掉一个字节重新找帧头
-                Sr_BufDrop(rngId, 1);
-                expectedLen = 0;
-                state = FB_STATE_FIND_HEAD;
-                break;
-            }
-            else
-            {
-                // 帧尾正确，继续校验
-                U8 checksum = 0;
-                for (S32 i = 0; i < expectedLen - uFRAME_END_LEN; ++i)
+                Sr_BufGetNoDel(rngId, buffer, 1);
+                if (buffer[0] == FRAME_HEAD)
                 {
-                    checksum ^= buffer[i];
-                }
-                if (buffer[expectedLen - 2] == checksum)
-                {
-                    // 正式提取数据
-                    Sr_BufDrop(rngId, uFRAME_HEAD_LEN);                         // 丢掉帧头
-                    Sr_BufGet(rngId, buffer, expectedLen - uFRAME_HE_ND_LEN);   // 提取负载
-                    Sr_BufDrop(rngId, uFRAME_END_LEN);                          // 丢掉帧尾
-
-                    frameCount++;
-                    state = FB_STATE_FIND_HEAD;
-                    
-                    S32 resultLen = expectedLen-uFRAME_HE_ND_LEN;
-                    
-                    expectedLen = 0;
-                    return resultLen;                                           // 返回完整命令帧长度
+                    state = FB_STATE_WAIT_LEN; // 状态切换
+                    break;                     // 跳出 switch，重新进入 while
                 }
                 else
                 {
-                    // 校验失败，丢掉该帧，重新找帧头
-                    Sr_BufDrop(rngId, expectedLen);
-                    state = FB_STATE_FIND_HEAD;
+                    Sr_BufDrop(rngId, 1); // 丢掉垃圾字节
+                    available--;
                 }
-            }  
+            }
+
+            // 如果没有足够数据，就退出
+            if (state != FB_STATE_WAIT_LEN)
+                return 0;
+            break;
+
+        case FB_STATE_WAIT_LEN:
+            if (available >= uFRAME_MIN_LEN)
+            {
+                Sr_BufGetNoDel(rngId, buffer, uFRAME_MIN_LEN);
+                expectedLen = ((buffer[uFRAME_LEN_H_IDX] << 8) |
+                               buffer[uFRAME_LEN_L_IDX]) + uFRAME_HE_ND_LEN;
+
+                if (expectedLen < uFRAME_MIN_LEN || expectedLen > uFRAME_MAX_LEN)
+                {
+                    // 长度非法，回到找帧头
+                    Sr_BufDrop(rngId, 1);
+                    expectedLen = 0;
+                    available--;
+                    state = FB_STATE_FIND_HEAD;
+                    break; // 回到 while，再进 FIND_HEAD
+                }
+                else
+                {
+                    state = FB_STATE_WAIT_AND_CHECK_FRAME;
+                    break; // 回到 while，再进 WAIT_AND_CHECK_FRAME
+                }
+            }
+            return 0; // 数据不够，退出函数
+
+        case FB_STATE_WAIT_AND_CHECK_FRAME:
+            if (available >= (U32)expectedLen)
+            {
+                // 可以取出完整帧
+                Sr_BufGetNoDel(rngId, buffer, expectedLen);
+                if (buffer[expectedLen - 1] != FRAME_END)
+                {
+                    // 帧尾错误，丢掉一个字节重新找帧头
+                    Sr_BufDrop(rngId, 1);
+                    expectedLen = 0;
+                    available--;
+                    state = FB_STATE_FIND_HEAD;
+                    break;
+                }
+                else
+                {
+                    // 校验
+                    U8 checksum = 0;
+                    for (S32 i = 0; i < expectedLen - uFRAME_END_LEN; ++i)
+                    {
+                        checksum ^= buffer[i];
+                    }
+                    if (buffer[expectedLen - 2] == checksum)
+                    {
+                        // 提取负载
+                        Sr_BufDrop(rngId, uFRAME_HEAD_LEN);
+                        Sr_BufGet(rngId, buffer, expectedLen - uFRAME_HE_ND_LEN);
+                        Sr_BufDrop(rngId, uFRAME_END_LEN);
+
+                        frameCount++;
+                        state = FB_STATE_FIND_HEAD;
+                        available -= expectedLen;
+                        // 返回完整帧长度
+                        S32 resultLen = expectedLen - uFRAME_HE_ND_LEN;
+                        expectedLen = 0;
+                        return resultLen; // 返回完整命令帧长度
+                    }
+                    else
+                    {
+                        // 校验失败，丢掉该帧
+                        Sr_BufDrop(rngId, expectedLen);
+                        state = FB_STATE_FIND_HEAD;
+                        break;
+                    }
+                }
+            }
+            return 0; // 数据不够，退出函数
         }
-        break;
 
+        // 如果状态没发生变化（比如还在 FIND_HEAD 但 available 用尽），避免死循环
+        if (state == FB_STATE_FIND_HEAD && available < uFRAME_MIN_LEN)
+        {
+            return 0;
+        }
     }
-
-    return 0; // 没有完整帧
 }
-
 
 
 
