@@ -109,6 +109,13 @@ S32 ProcTestCmd(const U8 *pCmd, U32 len)
     return TRUE;
 }
 
+S32 SendParaCmd(void)
+{
+    
+}
+
+
+
 
 void SendCmdAns(SerialPort* sp, const U8 *pBuf, S32 byteLen)
 {
