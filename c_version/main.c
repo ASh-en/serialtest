@@ -30,7 +30,7 @@ S32 DataRecv(const U8* pData, S32 dataLength)
 /* 程序入口 */
 int main(int argc, char* argv[])
 {
-    int comPort   = 4;       // 默认 COM5
+    int comPort   = 5;       // 默认 COM5
     int baudRate  = 115200;  // 默认波特率
     int timeoutMS = 50;      // 默认超时时间
 

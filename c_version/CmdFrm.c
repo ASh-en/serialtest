@@ -221,6 +221,8 @@ static U32 FBufferHasExFrame(SStaticRngId rngId, U8 *buffer)
                         // 校验失败，丢掉该帧
                         Sr_BufDrop(rngId, expectedLen);
                         state = FB_STATE_FIND_HEAD;
+                        available -= expectedLen;
+                        expectedLen = 0;
                         break;
                     }
                 }

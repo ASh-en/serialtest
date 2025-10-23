@@ -26,6 +26,10 @@ S32             SerialPort__ReadBuffer(SerialPort* sp, U8* pData, S32 dataLength
 
 void SerialPort_Init(SerialPort* sp, U32 recvBufSize, U32 sendBufSize) 
 {
+    if(sp == NULL)
+    {
+        return ;
+    }
     sp->portHandle = NULL;
     sp->onDataReceivedHandler = NULL;
     sp->onDataSentHandler = NULL;
@@ -64,6 +68,10 @@ void SerialPort_Init(SerialPort* sp, U32 recvBufSize, U32 sendBufSize)
  */
 void SerialPort_Uninit(SerialPort* sp)
 {
+    if(sp == NULL)
+    {
+        return ;
+    }
     SerialPort_Close(sp);
     printf("Info: Total %d bytes\r\n", sp->TotalCount);
     sp->portHandle = NULL;
@@ -119,16 +127,18 @@ BOOL SerialPort_OpenAsync(SerialPort* sp,
                           SerialPort_OnDataReceived onRecv,
                           SerialPort_OnDataSent onSent,                         
                           S32 timeoutMS)
-{
+{   
+    if(sp == NULL)
+    {
+        return FALSE;
+    }
+
     BOOL result = SerialPort_Open(sp, comPortNumber, baudRate, timeoutMS);
     if (result)
     {
         sp->onDataReceivedHandler = onRecv;
         sp->onDataSentHandler     = onSent;
-        if (sp->onDataSentHandler || sp->onDataReceivedHandler)
-        {
-            sp->workingThread = CreateThread(NULL, 0, SerialPort_WaitForData, sp, 0, &sp->workingThreadId);
-        }
+        sp->workingThread = CreateThread(NULL, 0, SerialPort_WaitForData, sp, 0, &sp->workingThreadId);
     }
     return result;
 }
@@ -150,7 +160,11 @@ BOOL SerialPort_OpenAsync(SerialPort* sp,
  */
 
 BOOL SerialPort_Open(SerialPort* sp, S32 comPortNumber, S32 baudRate, S32 timeoutMS)
-{
+{   
+    if(sp == NULL)
+    {
+        return FALSE;
+    }
     char portName[12];
     S16  portNameLength;
     DCB  portSettings;
@@ -241,7 +255,11 @@ BOOL SerialPort_Open(SerialPort* sp, S32 comPortNumber, S32 baudRate, S32 timeou
  * @param sp [in/out] 串口实例
  */
 void SerialPort_Close(SerialPort* sp)
-{    
+{   
+    if(sp == NULL)
+    {
+        return ;
+    } 
     sp->isOpen = FALSE;
     if (sp->portHandle)
     {
@@ -278,6 +296,10 @@ void SerialPort_Close(SerialPort* sp)
 
 S32 SerialPort_WriteBuffer(SerialPort* sp, const U8* data, S32 length)
 {
+    if(sp == NULL || data == NULL)
+    {
+        return -1;
+    }
     DWORD bytesWritten = 0;
 
     BOOL ok = WriteFile(
@@ -307,6 +329,10 @@ S32 SerialPort_WriteBuffer(SerialPort* sp, const U8* data, S32 length)
 
 DWORD WINAPI SerialPort_WaitForData(LPVOID lpParam)
 {
+    if(lpParam == NULL)
+    {
+        return -1;
+    }
     SerialPort* sp = (SerialPort*)lpParam;
     U8 buffer[256];
     DWORD bytesRead = 0;
@@ -320,7 +346,7 @@ DWORD WINAPI SerialPort_WaitForData(LPVOID lpParam)
             buffer,
             sizeof(buffer),
             &bytesRead,
-            &sp->olRead   // ✅ 异步
+            &sp->olRead   //  异步
         );
 
         if (!ok && GetLastError() == ERROR_IO_PENDING) 

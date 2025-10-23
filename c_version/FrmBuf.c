@@ -45,7 +45,7 @@ SStaticRngId Sr_CreateDynamic(U32 size)
     }
     // 一次性申请：结构体 + 缓冲区
     SStaticRngId rngId = (SStaticRngId)malloc(sizeof(SStaticRng) + size);
-    if (!rngId)
+    if (rngId == NULL)
     {
         return NULL;
     }
@@ -75,11 +75,14 @@ void Sr_DestroyDynamic(SStaticRngId rngId)
 
 U32 Sr_NBytes(const SStaticRngId rngId)
 {
+    if(rngId == NULL)
+    {
+        return 0;
+    }
     EnterCriticalSection(&rngId->lock);
     U32 used = rngId->usedSize;
     LeaveCriticalSection(&rngId->lock);
     return used;
-	//return ((rngId->pToBuf + rngId->bufSize - rngId->pFromBuf) % rngId->bufSize);
 }
 
 S32 Sr_BufPut(SStaticRngId rngId, const U8 *pBuf, U32 putbytes)
@@ -89,12 +92,25 @@ S32 Sr_BufPut(SStaticRngId rngId, const U8 *pBuf, U32 putbytes)
         return -1;
     }
     EnterCriticalSection(&rngId->lock); // 加锁
-	U32 free, tail;
 
+    U32 free, tail;
     free = rngId->bufSize - rngId->usedSize;
-    putbytes = (putbytes  >  free) ? free : putbytes;
-
 	tail = rngId->bufSize - rngId->pToBuf;
+   
+    //如果输入数据大于缓存区最大空间，仅输入数据的保留尾部数据
+    if(putbytes > rngId->bufSize)
+    {
+        pBuf += putbytes - rngId->bufSize;
+        putbytes = rngId->bufSize; 
+    }
+    //如果可用空间不足，覆盖旧数据
+    if(putbytes > free)
+    {
+        U32 overwrite = putbytes - free;
+        rngId->pFromBuf = (rngId->pFromBuf + overwrite) % rngId->bufSize;
+        rngId->usedSize -= overwrite;
+    }
+
 
 	if(putbytes <= tail)
 	{
