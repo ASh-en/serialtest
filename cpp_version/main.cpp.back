@@ -1,0 +1,142 @@
+#include <iostream>
+#include <string>
+#include <conio.h>
+#include <windows.h>
+
+#include "CmdFrm.h"
+#include "SerialPort.h"
+#include "AsyncFrame.h"
+
+// 全局计数器
+static U32 g_sentCount = 0;
+static U32 g_totalSentBytes = 0;
+static U32 g_receivedCount = 0;
+static U32 g_totalReceivedBytes = 0;
+static U32 g_frameCount = 0;
+
+// 数据发送完成回调
+void onDataSent(const U8* pData, S32 dataLength)
+{
+    g_totalSentBytes += dataLength;
+    g_sentCount++;
+}
+
+// 数据接收回调
+S32 onDataReceived(const U8* pData, S32 dataLength)
+{
+    g_totalReceivedBytes += dataLength;
+    std::cout << "Count " << ++g_receivedCount 
+              << ", Info: Data received " << dataLength << " bytes, Total " 
+              << g_totalReceivedBytes << " bytes" << std::endl;
+    return 0;
+}
+
+// 帧处理回调函数
+S32 onFrameReceived(const U8* frame, U32 len)
+{
+    g_frameCount++;
+    if (len >= 1) {
+        std::cout << "Received frame: ID=0x" << std::hex << static_cast<int>(frame[0])
+                  << ", Length=" << std::dec << len << " bytes" << std::endl;
+    }
+    
+    // 这里可以添加对不同类型帧的处理逻辑
+    // 根据frame[0]（帧类型）进行不同的处理
+    return 0;
+}
+
+int main(int argc, char* argv[])
+{
+    int comPort = 4;       // 默认 COM4
+    int baudRate = 115200; // 默认波特率
+    int timeoutMS = 50;    // 默认超时时间
+
+    // 解析命令行参数
+    if (argc >= 2) {
+        comPort = atoi(argv[1]);
+    }
+    if (argc >= 3) {
+        baudRate = atoi(argv[2]);
+    }
+    if (argc >= 4) {
+        timeoutMS = atoi(argv[3]);
+    }
+
+    std::cout << "Opening serial port COM" << comPort << " at " << baudRate << " baud..." << std::endl;
+
+    try {
+        // 创建串口实例
+        SerialPort serialPort(0x40000); // 设置缓冲区大小
+
+        // 初始化异步帧调度器
+        AsyncFrameDispatcher& frameDispatcher = AsyncFrameDispatcher::getInstance();
+        frameDispatcher.init();
+        // 注册帧处理函数（这里假设帧类型为0x01）
+        frameDispatcher.registerFrameHandler(0x35, onFrameReceived);
+        
+        // 打开串口（异步模式）
+        SerialPortResult result = serialPort.openAsync(comPort, baudRate, onDataReceived, onDataSent, timeoutMS);
+        if (result != SerialPortResult::SUCCESS) {
+            std::cerr << "Failed to open serial port COM" << comPort << " with error code: " << static_cast<int>(result) << std::endl;
+            return -1;
+        }
+        
+        std::cout << "Serial port COM" << comPort << " opened successfully." << std::endl;
+        std::cout << "Press 'q' to quit." << std::endl;
+        std::cout << "Press 's' to send a test frame." << std::endl;
+
+        // 创建接收缓冲区用于命令帧处理
+        auto recvBuffer = FrameBuffer::createDynamic(0x40000);
+        CommandFrame commandFrame(*recvBuffer);
+        
+        // 主循环
+        while (true) {
+            // 模拟处理接收到的命令帧
+            // 在实际应用中，您可能需要从SerialPort中读取数据并放入CommandFrame
+            U8 readBuffer[256];
+            S32 readBytes = serialPort.readBuffer(readBuffer, sizeof(readBuffer), 1);
+            if (readBytes > 0) {
+                commandFrame.putFrameData(readBuffer, readBytes);
+                commandFrame.processFrame(true); // true表示异步模式
+            }
+
+            // 检查键盘输入
+            if (_kbhit()) {
+                char ch = _getch();
+                if (ch == 'q' || ch == 'Q') {
+                    break; // 按 'q' 键退出
+                }
+                else if (ch == 's' || ch == 'S') {
+                    // 发送测试帧
+                    U8 testData[] = {0x66, 0x00, 0x00, 0x04, 0x33, 0xAA, 0x00, 0x00, 0xFB, 0x99};
+                    // 注意：这里直接发送格式化后的帧数据
+                    // 帧格式: 帧头(0x66) + 设备号(0x01) + 长度(0x0005) + 数据 + 校验 + 帧尾(0x99)
+                    
+                    if (serialPort.writeBuffer(testData, sizeof(testData)) > 0) {
+                        std::cout << "Test frame sent successfully" << std::endl;
+                    } else {
+                        std::cerr << "Failed to send test frame" << std::endl;
+                    }
+                }
+            }
+
+            Sleep(1); // 降低 CPU 占用
+        }
+        
+        // 输出统计信息
+        std::cout << "Count " << g_sentCount 
+                  << ", Info: Data sent  Total " << g_totalSentBytes << " bytes" << std::endl;
+        std::cout << "Frame Count " << g_frameCount << std::endl;
+
+        // 关闭串口
+        serialPort.close();
+        frameDispatcher.uninit();
+        std::cout << "Serial port closed. Exiting program." << std::endl;
+    }
+    catch (const std::exception& e) {
+        std::cerr << "Exception occurred: " << e.what() << std::endl;
+        return -1;
+    }
+
+    return 0;
+}

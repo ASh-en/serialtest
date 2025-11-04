@@ -1,281 +1,393 @@
-#include "SerialPort.hpp"
-#include <stdio.h>
-#include <stdlib.h>
+#include "SerialPort.h"
+#include <iostream>
+#include <sstream>
+#include <cstring>
 
-#define SERIALPORT_INTERNAL_TIMEOUT 1
+// 内部常量定义
+constexpr S32 SERIALPORT_INTERNAL_TIMEOUT = 1;  // 内部读写超时时间，单位毫秒
+constexpr DWORD MAX_BUFFER_SIZE = 256;          // 内部读写缓冲区大小
 
-TSerialPort::TSerialPort()
-{
-    m_portHandle = NULL;
-    m_OnDataReceivedHandler = NULL;	
-    m_OnDataSentHandler = NULL;	
-    m_timeoutMilliSeconds = 0;
-    m_workingThread = NULL;
-    m_workingThreadId = 0;
-    InitializeCriticalSection(&m_criticalSectionRead);
-    InitializeCriticalSection(&m_criticalSectionWrite);
-}
-
-TSerialPort::~TSerialPort()
-{
-    if (m_portHandle)
-    {
-        Close();        
+// 构造函数
+SerialPort::SerialPort(U32 recvBufSize, U32 sendBufSize) 
+    : m_portHandle(nullptr),
+      m_workingThread(nullptr),
+      m_eventRead(nullptr),
+      m_eventWrite(nullptr),
+      m_workingThreadId(0),
+      m_timeoutMilliSeconds(0),
+      m_totalByteCount(0) {
+    
+    // 初始化重叠IO结构
+    ZeroMemory(&m_overlappedRead, sizeof(OVERLAPPED));
+    ZeroMemory(&m_overlappedWrite, sizeof(OVERLAPPED));
+    
+    // 创建缓冲区
+    if (recvBufSize > 0) {
+        m_recvBuffer = FrameBuffer::create(recvBufSize);
     }
-    DeleteCriticalSection(&m_criticalSectionRead);
-    DeleteCriticalSection(&m_criticalSectionWrite);
+    if (sendBufSize > 0) {
+        m_sendBuffer = FrameBuffer::create(sendBufSize);
+    }
 }
 
-S32 TSerialPort::GetMaxTimeout()
-{
-    return m_timeoutMilliSeconds;
+// 析构函数
+SerialPort::~SerialPort() {
+    close();
+
 }
 
-void* TSerialPort::GetDataReceivedHandler()
-{
-    return m_OnDataReceivedHandler;
-}
+// // 移动构造函数
+// SerialPort::SerialPort(SerialPort&& other) noexcept 
+//     : m_portHandle(other.m_portHandle),
+//       m_workingThread(other.m_workingThread),
+//       m_eventRead(other.m_eventRead),
+//       m_eventWrite(other.m_eventWrite),
+//       m_workingThreadId(other.m_workingThreadId),
+//       m_timeoutMilliSeconds(other.m_timeoutMilliSeconds),
+//       m_isOpen(other.m_isOpen.load()),
+//       m_totalByteCount(other.m_totalByteCount.load()),
+//       m_onDataReceived(std::move(other.m_onDataReceived)),
+//       m_onDataSent(std::move(other.m_onDataSent)),
+//       m_recvBuffer(std::move(other.m_recvBuffer)),
+//       m_sendBuffer(std::move(other.m_sendBuffer)) {
+    
+//     // 初始化原对象的句柄
+//     other.m_portHandle = nullptr;
+//     other.m_workingThread = nullptr;
+//     other.m_eventRead = nullptr;
+//     other.m_eventWrite = nullptr;
+//     other.m_workingThreadId = 0;
+//     other.m_isOpen.store(false);
+//     other.m_totalByteCount.store(0);
+    
+//     // 重新设置重叠IO结构的事件句柄
+//     m_overlappedRead.hEvent = m_eventRead;
+//     m_overlappedWrite.hEvent = m_eventWrite;
+// }
 
-void* TSerialPort::GetDataSentHandler()
-{
-    return m_OnDataSentHandler;
-}
+// // 移动赋值操作符
+// SerialPort& SerialPort::operator=(SerialPort&& other) noexcept {
+//     if (this != &other) {
+//         // 关闭当前串口
+//         close();
+        
+//         // 移动资源
+//         m_portHandle = other.m_portHandle;
+//         m_workingThread = other.m_workingThread;
+//         m_eventRead = other.m_eventRead;
+//         m_eventWrite = other.m_eventWrite;
+//         m_workingThreadId = other.m_workingThreadId;
+//         m_timeoutMilliSeconds = other.m_timeoutMilliSeconds;
+//         m_isOpen.store(other.m_isOpen.load());
+//         m_totalByteCount.store(other.m_totalByteCount.load());
+//         m_onDataReceived = std::move(other.m_onDataReceived);
+//         m_onDataSent = std::move(other.m_onDataSent);
+//         m_recvBuffer = std::move(other.m_recvBuffer);
+//         m_sendBuffer = std::move(other.m_sendBuffer);
+        
+//         // 初始化原对象的句柄
+//         other.m_portHandle = nullptr;
+//         other.m_workingThread = nullptr;
+//         other.m_eventRead = nullptr;
+//         other.m_eventWrite = nullptr;
+//         other.m_workingThreadId = 0;
+//         other.m_isOpen.store(false);
+//         other.m_totalByteCount.store(0);
+        
+//         // 重新设置重叠IO结构的事件句柄
+//         m_overlappedRead.hEvent = m_eventRead;
+//         m_overlappedWrite.hEvent = m_eventWrite;
+//     }
+//     return *this;
+// }
 
-bool TSerialPort::OpenAsync(S32 comPortNumber, 
-                            S32 baudRate,                             
-                            void (*OnDataReceivedHandler)(const U8* pData, S32 dataLength),
-                            void (*OnDataSentHandler)(void),                         
-                            S32 timeoutMS 
-                            )                            
-{
-    bool result = Open(comPortNumber, baudRate, timeoutMS);
-    if (result)
-    {
-        m_OnDataReceivedHandler = OnDataReceivedHandler;
-        m_OnDataSentHandler     = OnDataSentHandler;
-        if (m_OnDataSentHandler || m_OnDataReceivedHandler)
-        {
-            m_workingThread = CreateThread(NULL, 0, SerialPort_WaitForData, this, 0, &m_workingThreadId);
+// 异步方式打开串口
+CommunicatorResult SerialPort::openAsync(std::string comPort,
+                                      S32 baudRate,
+                                      std::function<S32(const std::vector<U8>&, S32)> onRecv,
+                                      std::function<void(const std::vector<U8>&, S32)> onSent,
+                                      S32 timeoutMS) {
+    CommunicatorResult result = open(comPort, baudRate, timeoutMS);
+    
+    if (result == CommunicatorResult::SUCCESS) {
+        m_onDataReceived = std::move(onRecv);
+        m_onDataSent = std::move(onSent);
+        
+        // 创建工作线程
+        m_workingThread = CreateThread(nullptr, 0, waitForDataThread, this, 0, &m_workingThreadId);
+        if (m_workingThread == nullptr) {
+            std::cerr << "Error: Failed to create serial port working thread" << std::endl;
+            close();
+            return CommunicatorResult::FAILED;
         }
     }
+    
     return result;
 }
 
-bool TSerialPort::Open(S32 comPortNumber, S32 baudRate, S32 timeoutMS)
-{
-    char portName[12];
-    S32  portNameLength;
-    if (comPortNumber<0) return false;
-    if (comPortNumber>255) return false;
-    if (timeoutMS>15000) return false;
-    
-    portNameLength = sprintf(portName, "\\\\.\\COM%i", comPortNumber );
-    
-    m_portHandle = CreateFileA(portName, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
-    if ((m_portHandle==0) || ((unsigned long)m_portHandle==0xffffffff))
-    {
-        m_portHandle = 0;
-        return false;
+// 同步方式打开串口
+CommunicatorResult SerialPort::open(std::string comPort, S32 baudRate, S32 timeoutMS) {
+    // 参数校验
+    if (comPort.empty() || timeoutMS > 15000) {
+        return CommunicatorResult::INVALID_PARAM;
     }
-
+    
+    // 关闭已打开的串口
+    close();
+    
+    // 构建串口名称
+    std::ostringstream portNameStream;
+    portNameStream << "\\\\.\\" << comPort;
+    std::string portName = portNameStream.str();
+    
+    // 打开串口
+    m_portHandle = CreateFileA(
+        portName.c_str(),
+        GENERIC_READ | GENERIC_WRITE,
+        0,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_FLAG_OVERLAPPED,  // 异步模式
+        nullptr
+    );
+    
+    if (m_portHandle == nullptr || m_portHandle == INVALID_HANDLE_VALUE) {
+        std::cerr << "Error: Cannot open COM port " << portName << std::endl;
+        m_portHandle = nullptr;
+        return CommunicatorResult::FAILED;
+    }
+    
+    // 设置超时时间
     m_timeoutMilliSeconds = timeoutMS;
     
-    DCB portSettings;
-    memset(&portSettings, 0, sizeof(portSettings));
+    // 设置缓冲区大小
+    SetupComm(m_portHandle, 40960, 40960);
+    PurgeComm(m_portHandle, PURGE_RXCLEAR | PURGE_TXCLEAR);  // 清空缓冲区
+    
+    // 配置串口参数
+    DCB portSettings = {0};
+    portSettings.DCBlength = sizeof(DCB);
+    if (!GetCommState(m_portHandle, &portSettings)) {
+        std::cerr << "Error: Failed to get serial port state" << std::endl;
+        close();
+        return CommunicatorResult::FAILED;
+    }
     
     portSettings.BaudRate = baudRate;
     portSettings.ByteSize = 8;
-    portSettings.Parity   = NOPARITY;
+    portSettings.Parity = NOPARITY;
     portSettings.StopBits = ONESTOPBIT;
     
-    if (!SetCommState(m_portHandle, &portSettings))
-    {
-        return false;
+    if (!SetCommState(m_portHandle, &portSettings)) {
+        std::cerr << "Error: Failed to set serial port state" << std::endl;
+        close();
+        return CommunicatorResult::FAILED;
     }
     
-    COMMTIMEOUTS portTimeOuts;                   
-    memset(&portTimeOuts, 0, sizeof(portTimeOuts));
-    portTimeOuts.ReadIntervalTimeout = SERIALPORT_INTERNAL_TIMEOUT;
-    portTimeOuts.ReadTotalTimeoutMultiplier = 0;    
-    portTimeOuts.ReadTotalTimeoutConstant = SERIALPORT_INTERNAL_TIMEOUT;    
-
-    if (!SetCommTimeouts(m_portHandle, &portTimeOuts))
-    {
-        return false;
+    // 配置超时
+    COMMTIMEOUTS portTimeOuts = {0};
+    portTimeOuts.ReadIntervalTimeout = MAXDWORD;  // 非阻塞读
+    portTimeOuts.ReadTotalTimeoutMultiplier = 0;
+    portTimeOuts.ReadTotalTimeoutConstant = 0;    // 整体超时由参数决定
+    
+    if (!SetCommTimeouts(m_portHandle, &portTimeOuts)) {
+        std::cerr << "Error: Failed to set serial port timeouts" << std::endl;
+        close();
+        return CommunicatorResult::FAILED;
     }
-    return (m_portHandle!=0);
+    
+    // 创建事件句柄
+    m_eventRead = CreateEvent(nullptr, TRUE, FALSE, nullptr);
+    m_eventWrite = CreateEvent(nullptr, TRUE, FALSE, nullptr);
+    
+    if (m_eventRead == nullptr || m_eventWrite == nullptr) {
+        std::cerr << "Error: Failed to create serial port events" << std::endl;
+        close();
+        return CommunicatorResult::FAILED;
+    }
+    
+    // 设置重叠IO结构的事件句柄
+    ZeroMemory(&m_overlappedRead, sizeof(OVERLAPPED));
+    ZeroMemory(&m_overlappedWrite, sizeof(OVERLAPPED));
+    m_overlappedRead.hEvent = m_eventRead;
+    m_overlappedWrite.hEvent = m_eventWrite;
+    
+    // 标记串口已打开
+    m_isOpen.store(true);
+    
+    return CommunicatorResult::SUCCESS;
 }
 
-void TSerialPort::Close()
-{    
-    EnterCriticalSection(&m_criticalSectionRead);  //prevents port closing if ReadBuffer  is not complete
-    EnterCriticalSection(&m_criticalSectionWrite); //prevents port closing if WriteBuffer is not complete
-    if (m_portHandle)
-    {
-        CloseHandle(m_portHandle);			
-        m_portHandle = NULL;
-        Sleep(SERIALPORT_INTERNAL_TIMEOUT*4);
-        m_workingThread = NULL;
-        m_workingThreadId = 0;      
+// 关闭串口
+void SerialPort::close() {
+    // 标记串口为关闭状态
+    m_isOpen.store(false);
+    
+    // 关闭串口句柄
+    if (m_portHandle != nullptr) {
+        CloseHandle(m_portHandle);
+        m_portHandle = nullptr;
+        Sleep(SERIALPORT_INTERNAL_TIMEOUT * 4);
     }
-    LeaveCriticalSection(&m_criticalSectionRead);
-    LeaveCriticalSection(&m_criticalSectionWrite);
+    
+    // 关闭事件句柄
+    if (m_eventRead != nullptr) {
+        CloseHandle(m_eventRead);
+        m_eventRead = nullptr;
+    }
+    if (m_eventWrite != nullptr) {
+        CloseHandle(m_eventWrite);
+        m_eventWrite = nullptr;
+    }
+    
+    // 等待工作线程退出
+    if (m_workingThread != nullptr) {
+        WaitForSingleObject(m_workingThread, 2000);
+        CloseHandle(m_workingThread);
+        m_workingThread = nullptr;
+        m_workingThreadId = 0;
+    }
+    
+    // 清除回调函数
+    m_onDataReceived = nullptr;
+    m_onDataSent = nullptr;
+        
+    // 输出统计信息
+    std::cout << "Info: Total " << m_totalByteCount.load() << " bytes" << std::endl;
 }
 
-bool TSerialPort::IsOpen()
-{
-    return (m_portHandle!=0);
-}
-
-S32 TSerialPort::__WriteBuffer(const U8* pData, S32 dataLength)
-{
-    if (m_portHandle==NULL)
-    {
-        return 0;
+// 内部写数据函数
+S32 SerialPort::writeBufferInternal(const std::vector<U8>& data, S32 length) {
+    if (!m_isOpen || m_portHandle == nullptr || data.empty() || length <= 0) {
+        return -1;
     }
+    
     DWORD bytesWritten = 0;
+    BOOL result = WriteFile(
+        m_portHandle,
+        data.data(),
+        length,
+        &bytesWritten,
+        &m_overlappedWrite
+    );
     
-    if (!WriteFile(m_portHandle, pData, dataLength, &bytesWritten, NULL))
-    {
-        return 0;
-    }    
-    return (S32)bytesWritten;   
-}
-
-S32 TSerialPort::__ReadBuffer(U8* pData, S32 dataLength, S32 timeOutMS)
-{
-    DWORD bytesRead,bytesReadTotal;
-    S32   timeOutCounter, bytesLeft;
-
-	if (m_portHandle==NULL)
-	{
-		return 0;
-	}
-    if (timeOutMS<0)
-    {
-        timeOutMS = m_timeoutMilliSeconds;
+    // 处理异步操作
+    if (!result && GetLastError() == ERROR_IO_PENDING) {
+        WaitForSingleObject(m_eventWrite, INFINITE);
+        GetOverlappedResult(m_portHandle, &m_overlappedWrite, &bytesWritten, FALSE);
     }
     
-    bytesRead = 0;
-    bytesReadTotal = 0;
-    timeOutCounter = timeOutMS;
-    bytesLeft = dataLength;
+    // 触发发送完成回调
+    if (bytesWritten > 0 && m_onDataSent) {
+        m_onDataSent(data, bytesWritten);
+    }
+    
+    return static_cast<S32>(bytesWritten);
+}
 
-    if (timeOutMS<SERIALPORT_INTERNAL_TIMEOUT*2)
-    {
-        Sleep(timeOutMS);
-        ReadFile(m_portHandle, pData, dataLength, &bytesRead, NULL);
-        bytesReadTotal += bytesRead;
-    } else {
-        while(timeOutCounter>0)
-        {            
-            bytesRead = 0;
-            ReadFile(m_portHandle, pData+bytesReadTotal, dataLength, &bytesRead, NULL);
-            if (bytesRead)
-            {
-                dataLength     -= bytesRead;
-                bytesReadTotal += bytesRead;
-                if (dataLength==0) break;
-                timeOutCounter = timeOutMS;
-            } else {
-                timeOutCounter -= SERIALPORT_INTERNAL_TIMEOUT;
-            }            
+// 内部读数据函数
+S32 SerialPort::readBufferInternal(std::vector<U8>& data, S32 length, S32 timeoutMS) {
+    if (!m_isOpen || m_portHandle == nullptr || data.empty() || length <= 0) {
+        return -1;
+    }
+    
+    DWORD bytesRead = 0;
+    BOOL result = ReadFile(
+        m_portHandle,
+        data.data(),
+        length,
+        &bytesRead,
+        &m_overlappedRead
+    );
+    
+    // 处理异步操作
+    if (!result && GetLastError() == ERROR_IO_PENDING) {
+        DWORD waitResult = WaitForSingleObject(m_eventRead, timeoutMS);
+        if (waitResult == WAIT_OBJECT_0) {
+            GetOverlappedResult(m_portHandle, &m_overlappedRead, &bytesRead, FALSE);
+        } else if (waitResult == WAIT_TIMEOUT) {
+            return -2;  // 超时
         }
     }
-    if (bytesReadTotal)
-    {
-        if (m_OnDataReceivedHandler)
-        {
-            m_OnDataReceivedHandler(pData, bytesReadTotal);
+    
+    return static_cast<S32>(bytesRead);
+}
+
+// 读数据接口
+S32 SerialPort::readBuffer(std::vector<U8>& data, S32 length, S32 timeoutMS) {
+    if (m_recvBuffer && m_recvBuffer->getBytesCount() > 0) {
+        // 如果接收缓冲区有数据，优先从缓冲区读取
+        return m_recvBuffer->get(data.data(), length);
+    }
+    
+    // 否则直接从串口读取
+    return readBufferInternal(data, length, timeoutMS);
+}
+
+// 写数据接口
+S32 SerialPort::writeBuffer(const std::vector<U8>& data) {
+    return writeBufferInternal(data, data.size());
+}
+
+// 发送命令应答
+// void SerialPort::sendCommand(const U8* buffer, S32 byteLen) {
+//     writeBuffer(buffer, byteLen);
+//     // // 如果有发送缓冲区，则使用缓冲区
+//     // if (m_sendBuffer) {
+//     //     m_sendBuffer->put(buffer, byteLen);
+//     //     // 注意：这里只是将数据放入缓冲区，实际发送需要另外的处理逻辑
+//     //     // 可以添加一个发送线程来处理缓冲区数据的发送
+//     //     std::thread([this](const U8* buffer, S32 byteLen) {
+//     //         writeBuffer(buffer, byteLen);
+//     //     }, buffer, byteLen).detach();
+//     // } else {
+//     //     // 否则直接发送
+//     //     writeBuffer(buffer, byteLen);
+//     // }
+// }
+
+// 异步数据接收线程函数
+DWORD WINAPI SerialPort::waitForDataThread(LPVOID lpParam) {
+    SerialPort* sp = static_cast<SerialPort*>(lpParam);
+    U8 buffer[MAX_BUFFER_SIZE];
+    DWORD bytesRead = 0;
+    
+    while (sp->m_isOpen.load()) {
+        // 重置事件
+        ResetEvent(sp->m_eventRead);
+        
+        // 异步读取数据
+        BOOL result = ReadFile(
+            sp->m_portHandle,
+            buffer,
+            sizeof(buffer),
+            &bytesRead,
+            &sp->m_overlappedRead
+        );
+        
+        // 处理异步操作
+        if (!result && GetLastError() == ERROR_IO_PENDING) {
+            DWORD waitResult = WaitForSingleObject(sp->m_eventRead, sp->m_timeoutMilliSeconds);
+            if (waitResult == WAIT_OBJECT_0) {
+                GetOverlappedResult(sp->m_portHandle, &sp->m_overlappedRead, &bytesRead, FALSE);
+            } else if (waitResult == WAIT_TIMEOUT) {
+                continue;  // 超时，继续下一次读取
+            }
+        }
+        
+        // 更新统计计数
+        sp->m_totalByteCount.fetch_add(bytesRead);
+        
+        // 数据放入接收缓冲区
+        if (bytesRead > 0 && sp->m_recvBuffer) {
+            sp->m_recvBuffer->put(buffer, bytesRead);
+        }
+        
+        // 触发数据接收回调
+        if (bytesRead > 0 && sp->m_onDataReceived) {
+            sp->m_onDataReceived(std::vector<U8>(buffer, buffer + bytesRead), bytesRead);
         }
     }
-	return bytesReadTotal;
-}
-
-S32 TSerialPort::ReadBuffer(U8* pData, S32 dataLength, S32 timeOutMS)
-{
-    EnterCriticalSection(&m_criticalSectionRead);
-    S32 result = __ReadBuffer(pData, dataLength, timeOutMS);
-    LeaveCriticalSection(&m_criticalSectionRead);
-    return result;
-}
-
-
-S32 TSerialPort::WriteBuffer(const U8* pData, S32 dataLength)
-{
-    EnterCriticalSection(&m_criticalSectionWrite);
-    S32 result = __WriteBuffer(pData, dataLength);
-    LeaveCriticalSection(&m_criticalSectionWrite);
-    if (m_OnDataSentHandler)
-    {
-        m_OnDataSentHandler();
-    }
-    return result;
-}
-
-
-S32 TSerialPort::WriteLine(char* pLine, bool addCRatEnd)
-{
     
-    if (m_portHandle==NULL)
-    {
-        return 0;
-    }
-    if (pLine==NULL)
-    {
-        return 0;
-    }
-    S32 lineLength = strlen(pLine);
-    if (lineLength==0)
-    {
-        return 0;
-    }
-    
-    EnterCriticalSection(&m_criticalSectionWrite);
-    S32 result = __WriteBuffer((U8*)pLine, lineLength);
-    if (pLine[lineLength-1]!=0x0D)
-    {
-        char cr = 13;
-        result+=__WriteBuffer((U8*)&cr, 1);
-    }
-    LeaveCriticalSection(&m_criticalSectionWrite);
-    if (m_OnDataSentHandler)
-    {
-        m_OnDataSentHandler();
-    }
-    return result;
-}
-
-S32 TSerialPort::ReadLine(char* pLine, S32 maxBufferSize, S32 timeOutMS)
-{
-    if (m_portHandle==NULL)
-    {
-        return 0;
-    }
-    if (pLine==NULL)
-    {
-        return 0;
-    }
-    
-    EnterCriticalSection(&m_criticalSectionRead);
-    S32 result = __ReadBuffer((U8*)pLine, maxBufferSize-1, timeOutMS);	
-    if (result<maxBufferSize)
-    {
-        pLine[result] = 0;
-    }
-    LeaveCriticalSection(&m_criticalSectionRead);
-    return result;
-}
-
-DWORD WINAPI SerialPort_WaitForData( LPVOID lpParam )       //该回调函数必须是static 或全局函数，故无法使用类成员函数
-{
-    TSerialPort* serialPort = (TSerialPort*)lpParam;
-    
-    static U8 packet[64];
-    S32 packetSize = sizeof(packet);   
-    while(serialPort->IsOpen())
-    {
-        serialPort->ReadBuffer(packet, packetSize, SERIALPORT_INTERNAL_TIMEOUT);
-    }    
     return 0;
 }
